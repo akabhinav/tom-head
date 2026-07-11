@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.chronodim</groupId>
+  <artifactId>chronodim-parent</artifactId>
+  <version>1.0.0-SNAPSHOT</version>
+  <packaging>pom</packaging>
+
+  <name>ChronoDim</name>
+  <description>Embedded, single-process, bitemporal SCD Type 2 storage engine</description>
+
+  <modules>
+    <module>engine-api</module>
+    <module>engine-storage</module>
+    <module>engine-core</module>
+    <module>engine-export</module>
+    <module>engine-durability</module>
+    <module>engine-cli</module>
+    <module>engine-testkit</module>
+    <module>engine-bench</module>
+  </modules>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <!-- Production target is JDK 25; the build runs on any JDK >= 21 (CI pins 25 via -Djava.release=25). -->
+    <java.release>21</java.release>
+    <maven.compiler.release>${java.release}</maven.compiler.release>
+
+    <rocksdb.version>9.10.0</rocksdb.version>
+    <picocli.version>4.7.7</picocli.version>
+    <snakeyaml.version>2.4</snakeyaml.version>
+    <slf4j.version>2.0.16</slf4j.version>
+    <junit.version>5.11.4</junit.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>io.chronodim</groupId><artifactId>engine-api</artifactId><version>${project.version}</version></dependency>
+      <dependency><groupId>io.chronodim</groupId><artifactId>engine-storage</artifactId><version>${project.version}</version></dependency>
+      <dependency><groupId>io.chronodim</groupId><artifactId>engine-core</artifactId><version>${project.version}</version></dependency>
+      <dependency><groupId>io.chronodim</groupId><artifactId>engine-export</artifactId><version>${project.version}</version></dependency>
+      <dependency><groupId>io.chronodim</groupId><artifactId>engine-durability</artifactId><version>${project.version}</version></dependency>
+      <dependency><groupId>io.chronodim</groupId><artifactId>engine-cli</artifactId><version>${project.version}</version></dependency>
+      <dependency><groupId>io.chronodim</groupId><artifactId>engine-testkit</artifactId><version>${project.version}</version></dependency>
+
+      <dependency><groupId>org.rocksdb</groupId><artifactId>rocksdbjni</artifactId><version>${rocksdb.version}</version></dependency>
+      <dependency><groupId>info.picocli</groupId><artifactId>picocli</artifactId><version>${picocli.version}</version></dependency>
+      <dependency><groupId>org.yaml</groupId><artifactId>snakeyaml</artifactId><version>${snakeyaml.version}</version></dependency>
+      <dependency><groupId>org.slf4j</groupId><artifactId>slf4j-api</artifactId><version>${slf4j.version}</version></dependency>
+      <dependency><groupId>org.slf4j</groupId><artifactId>slf4j-simple</artifactId><version>${slf4j.version}</version></dependency>
+      <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><version>${junit.version}</version><scope>test</scope></dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>3.13.0</version>
+          <configuration>
+            <release>${java.release}</release>
+            <compilerArgs>
+              <arg>-Xlint:all,-serial,-this-escape,-processing</arg>
+            </compilerArgs>
+          </configuration>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>3.2.5</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-jar-plugin</artifactId>
+          <version>3.4.1</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-shade-plugin</artifactId>
+          <version>3.6.0</version>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
+</project>

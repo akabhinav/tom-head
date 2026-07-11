@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>io.chronodim</groupId><artifactId>chronodim-parent</artifactId><version>1.0.0-SNAPSHOT</version></parent>
+  <artifactId>engine-export</artifactId>
+  <name>ChronoDim :: Export</name>
+  <description>Publisher + Finalizer: cold-tier publishing under the frozen open column contract.</description>
+  <dependencies>
+    <dependency><groupId>io.chronodim</groupId><artifactId>engine-api</artifactId></dependency>
+    <dependency><groupId>io.chronodim</groupId><artifactId>engine-core</artifactId></dependency>
+    <dependency><groupId>io.chronodim</groupId><artifactId>engine-storage</artifactId></dependency>
+    <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>
+  </dependencies>
+</project>

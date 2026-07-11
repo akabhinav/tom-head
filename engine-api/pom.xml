@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>io.chronodim</groupId><artifactId>chronodim-parent</artifactId><version>1.0.0-SNAPSHOT</version></parent>
+  <artifactId>engine-api</artifactId>
+  <name>ChronoDim :: API</name>
+  <description>Public Java API, config model, exceptions. Zero heavy dependencies.</description>
+  <dependencies>
+    <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>
+  </dependencies>
+</project>
