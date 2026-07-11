@@ -61,6 +61,7 @@ public final class DataGen {
                   - {name: id,         type: string}
                 %s  - {name: amount,     type: double}
                   - {name: updated_at, type: timestamp}
+                ignored_columns: [updated_at]
                 valid_time:
                   mode: source_column
                   column: updated_at

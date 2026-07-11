@@ -1,0 +1,4 @@
+customer_id,name,segment,risk_score,exposure,updated_at,_op
+C1,Alice Smith,RETAIL,130.0,10500.00,2026-07-04T00:00:00Z,
+C4,Dan,PRIVATE,55.5,90000.00,2026-07-04T00:00:00Z,
+C3,,,,,2026-07-05T00:00:00Z,delete

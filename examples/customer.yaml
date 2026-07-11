@@ -1,0 +1,27 @@
+# ChronoDim table config — customer dimension (see docs/formats.md for the grammar)
+table: customer
+business_key: [customer_id]
+schema:
+  - {name: customer_id, type: string}
+  - {name: name,        type: string}
+  - {name: segment,     type: string}
+  - {name: risk_score,  type: double}
+  - {name: exposure,    type: "decimal(18,4)"}
+  - {name: updated_at,  type: timestamp}
+tracked_columns: [name, segment, risk_score, exposure]
+ignored_columns: [updated_at]
+valid_time:
+  mode: source_column
+  column: updated_at
+late_arrival:
+  policy: split            # split | reject | quarantine
+deletes:
+  mode: soft               # soft | ignore
+on_row_error: skip_rows    # fail_batch | skip_rows | quarantine
+quality_gates:
+  - {column: customer_id, rule: not_null}
+  - {column: risk_score,  rule: "between 0 and 1000"}
+  - {column: segment,     rule: "in (RETAIL, SME, CORP, PRIVATE)"}
+publish:
+  enabled: true
+  location: ./export/customer

@@ -1,0 +1,18 @@
+# Regulatory adjustment table: strict — any bad row fails the whole batch atomically.
+table: adjustment
+business_key: [adj_id]
+on_row_error: fail_batch
+schema:
+  - {name: adj_id,      type: string}
+  - {name: customer_id, type: string}
+  - {name: amount,      type: "decimal(18,2)"}
+  - {name: reason,      type: string}
+  - {name: effective,   type: timestamp}
+valid_time:
+  mode: source_column
+  column: effective
+late_arrival:
+  policy: split
+quality_gates:
+  - {column: amount,      rule: not_null}
+  - {column: customer_id, rule: not_null}

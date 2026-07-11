@@ -1,0 +1,6 @@
+[
+  {"customer_id": "C1", "name": "Alice",  "segment": "RETAIL", "risk_score": 120.5, "exposure": "10000.00", "updated_at": "2026-07-01T00:00:00Z"},
+  {"customer_id": "C2", "name": "Bob",    "segment": "SME",    "risk_score": 340.0, "exposure": "250000.50", "updated_at": "2026-07-01T00:00:00Z"},
+  {"customer_id": "C3", "name": "Carol",  "segment": "CORP",   "risk_score": 77.25, "exposure": "1200000.00", "updated_at": "2026-07-02T12:30:00Z"},
+  {"customer_id": "C2", "_op": "delete",  "updated_at": "2026-07-03T00:00:00Z"}
+]

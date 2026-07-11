@@ -1,0 +1,8 @@
+{
+  "customer": [
+    {"customer_id": "C9", "name": "Eve", "segment": "SME", "risk_score": 210.0, "exposure": "50000.00", "updated_at": "2026-07-10T00:00:00Z"}
+  ],
+  "adjustment": [
+    {"adj_id": "A1", "customer_id": "C9", "amount": "125.50", "reason": "regulatory true-up", "effective": "2026-06-30T00:00:00Z"}
+  ]
+}

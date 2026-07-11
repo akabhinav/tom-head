@@ -1,0 +1,2 @@
+{"customer_id": "C1", "name": "Alice Smith", "segment": "RETAIL", "risk_score": 131.0, "exposure": "10999.99", "updated_at": "2026-06-15T00:00:00Z"}
+{"customer_id": "C4", "name": "Dan", "segment": "PRIVATE", "risk_score": 60.0, "exposure": "91000.00", "updated_at": "2026-07-06T00:00:00Z"}
