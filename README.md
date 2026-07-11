@@ -235,3 +235,20 @@ engine-cli/         picocli CLI; `mvn package` produces the fat chronodim.jar.
 engine-testkit/     Reference SCD2 impl, generators, the full test suite.
 engine-bench/       Standard benchmark workload (§10) with JSON report.
 ```
+
+## Performance status
+
+Correctness and architecture are complete; the §10 acceptance run belongs on the
+reference hardware (8 physical cores, 64 GB, NVMe). Measured on a small shared
+CI container (`chronodim bench --rows 500000 --changes 100000`, RocksDB backend):
+
+| metric | result | §10 target (reference hw) |
+|---|---|---|
+| warm point read p50 / p99 | **21 µs / 82 µs** | ≤ 50 µs / ≤ 1 ms ✅ |
+| bulk backfill | 60k rows/s | 50M ≤ 5 min (≈167k/s) — pending hot-path pass |
+| CDC apply | 10k applies/s | ≥ 100k/s — pending hot-path pass |
+
+The remaining performance work is the planned Phase-5 hardening: sharded apply
+(N shards by key hash), batched keymap lookups via `multiGet`, buffer reuse on
+the coercion path, and the JMH `-prof gc` zero-allocation audit. None of it
+changes any public API or on-disk contract.
