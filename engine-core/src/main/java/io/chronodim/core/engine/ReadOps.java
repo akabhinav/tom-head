@@ -195,7 +195,7 @@ final class ReadOps {
             Column c = bkCols.get(i);
             Object raw = businessKey.get(c.name());
             if (raw == null) throw new ValidationException("business key column '" + c.name() + "' missing");
-            vals[i] = c.type().coerce(raw, c.scale());
+            vals[i] = c.type().coerce(raw);
         }
         byte[] bkBytes = Codecs.encodeBusinessKey(bkCols, vals);
         byte[] mapped = snap.get(Codecs.keymapKey(rt.tableId(), bkBytes));

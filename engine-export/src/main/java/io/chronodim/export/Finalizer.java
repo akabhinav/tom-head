@@ -32,6 +32,10 @@ public final class Finalizer {
     private Finalizer() {}
 
     public static Map<String, Object> run(Path location, List<String> businessKey) {
+        return run(location, businessKey, List.of());
+    }
+
+    public static Map<String, Object> run(Path location, List<String> businessKey, List<String> partitionBy) {
         try {
             Path logDir = location.resolve(PublishedContract.LOG_DIR);
             Path dataDir = location.resolve(PublishedContract.DATA_DIR);
@@ -57,7 +61,8 @@ public final class Finalizer {
                 boolean isFinalize = "finalize".equals(e.get("type"));
                 for (Object f : fl) {
                     String rel = String.valueOf(((Map<?, ?>) f).get("path"));
-                    if (isFinalize && rel.startsWith(PublishedContract.FINALIZED_DIR + "/current-")) continue;
+                    String base = rel.substring(rel.lastIndexOf('/') + 1);
+                    if (isFinalize && base.startsWith("current-")) continue; // derived artifact, rebuilt below
                     Path file = location.resolve(rel);
                     if (!Files.exists(file)) continue;
                     replaced.add(rel);
@@ -101,15 +106,25 @@ public final class Finalizer {
                 }
             }
 
-            // Write consolidated log (verbatim, sorted for locality) + current snapshot.
+            // Write consolidated log (verbatim, sorted for locality) + current snapshot,
+            // preserving the table's Hive-style partition layout.
             allRows.sort(Comparator
                     .comparing((Map<String, Object> r) -> groupKey(r, businessKey))
                     .thenComparing(r -> String.valueOf(r.get(PublishedContract.VALID_FROM)))
                     .thenComparing(r -> String.valueOf(r.get(PublishedContract.TX_TIME))));
-            String logName = PublishedContract.FINALIZED_DIR + "/log-" + String.format("%020d", nextSeq) + ".jsonl";
-            String curName = PublishedContract.FINALIZED_DIR + "/current-" + String.format("%020d", nextSeq) + ".jsonl";
-            writeAtomic(location.resolve(logName), allRows);
-            writeAtomic(location.resolve(curName), current);
+            List<Map<String, Object>> fileEntries = new ArrayList<>();
+            String logBase = "log-" + String.format("%020d", nextSeq) + ".jsonl";
+            String curBase = "current-" + String.format("%020d", nextSeq) + ".jsonl";
+            for (Map.Entry<String, List<Map<String, Object>>> pe : byPartition(allRows, partitionBy).entrySet()) {
+                String rel = finalizedRel(pe.getKey(), logBase);
+                writeAtomic(location.resolve(rel), pe.getValue());
+                fileEntries.add(Map.of("path", rel, "rows", (long) pe.getValue().size()));
+            }
+            for (Map.Entry<String, List<Map<String, Object>>> pe : byPartition(current, partitionBy).entrySet()) {
+                String rel = finalizedRel(pe.getKey(), curBase);
+                writeAtomic(location.resolve(rel), pe.getValue());
+                fileEntries.add(Map.of("path", rel, "rows", (long) pe.getValue().size()));
+            }
 
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("seq", nextSeq);
@@ -117,9 +132,7 @@ public final class Finalizer {
             entry.put("txn_to", txnTo);
             entry.put("rows", (long) allRows.size());
             entry.put("current_rows", (long) current.size());
-            entry.put("files", List.of(
-                    Map.of("path", logName, "rows", (long) allRows.size()),
-                    Map.of("path", curName, "rows", (long) current.size())));
+            entry.put("files", fileEntries);
             entry.put("replaces", replaced);
             entry.put("created_ms", System.currentTimeMillis());
             Path tmp = logDir.resolve(String.format("%020d.json.tmp", nextSeq));
@@ -132,11 +145,11 @@ public final class Finalizer {
             // Refresh the view to read finalized log + fresh tail.
             Path view = location.resolve("scd2_view.sql");
             if (Files.exists(view)) {
-                String table = byEntity.isEmpty() ? "t" : "t";
+                // ** matches zero or more directories, covering flat and partitioned layouts.
                 Files.writeString(view, PublishedContract.viewTemplate(
-                        table,
-                        "read_json_auto(['" + location.toAbsolutePath() + "/finalized/log-*.jsonl', '"
-                                + location.toAbsolutePath() + "/data/*.jsonl'])",
+                        "t",
+                        "read_json_auto(['" + location.toAbsolutePath() + "/finalized/**/log-*.jsonl', '"
+                                + location.toAbsolutePath() + "/data/**/*.jsonl'])",
                         businessKey));
             }
 
@@ -151,7 +164,22 @@ public final class Finalizer {
         }
     }
 
+    private static Map<String, List<Map<String, Object>>> byPartition(List<Map<String, Object>> rows, List<String> partitionBy) {
+        Map<String, List<Map<String, Object>>> out = new LinkedHashMap<>();
+        for (Map<String, Object> r : rows) {
+            out.computeIfAbsent(PublishedContract.partitionPath(partitionBy, r), x -> new ArrayList<>()).add(r);
+        }
+        return out;
+    }
+
+    private static String finalizedRel(String partitionPath, String baseName) {
+        return partitionPath.isEmpty()
+                ? PublishedContract.FINALIZED_DIR + "/" + baseName
+                : PublishedContract.FINALIZED_DIR + "/" + partitionPath + "/" + baseName;
+    }
+
     private static void writeAtomic(Path target, List<Map<String, Object>> rows) throws IOException {
+        Files.createDirectories(target.getParent());
         StringBuilder sb = new StringBuilder(rows.size() * 128);
         for (Map<String, Object> r : rows) sb.append(Json.write(r)).append('\n');
         Path tmp = target.resolveSibling(target.getFileName() + ".tmp");

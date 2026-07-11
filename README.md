@@ -167,7 +167,7 @@ exactly-once) to each published table's location:
 
 ```
 export/customer/
-  _contract.json          # column contract descriptor
+  _contract.json          # column contract descriptor (incl. partition_by)
   scd2_view.sql           # LEAD()-based SCD2 view template (DuckDB/Spark/Databricks)
   _chronodim_log/         # atomic commit log (the source of truth for readers)
   data/part-*.jsonl       # version records: payload + _valid_from, _valid_to,
@@ -175,6 +175,31 @@ export/customer/
   finalized/              # after `chronodim finalize`: consolidated log +
                           #   materialized current snapshot (_is_current)
 ```
+
+### Partitioning
+
+`publish.partition_by: [region, year]` produces Hive-style partitioned output —
+`data/region=EU/year=2026/part-*.jsonl` — which Spark, Databricks and DuckDB
+prune natively. Partition values also stay in the row payload, so plain glob
+readers keep working; nulls land in `__HIVE_DEFAULT_PARTITION__`. `finalize`
+preserves the same layout (`finalized/region=EU/year=2026/log-*.jsonl` +
+`current-*.jsonl`).
+
+### Data types
+
+Every type Spark SQL can store in a table:
+
+| category | types |
+|---|---|
+| numbers | `tinyint`, `smallint`, `int`, `bigint`/`long`, `float`, `double`, `decimal(p,s)` (p ≤ 38, exact) |
+| text/binary | `string` (`char(n)`/`varchar(n)` accepted as aliases), `binary`/`bytes` |
+| temporal | `date`, `timestamp` (µs UTC), `timestamp_ntz` |
+| boolean | `boolean` |
+| nested | `array<T>`, `map<K,V>` (scalar keys), `struct<name:type,...>` — arbitrarily nested |
+
+Not storable (rejected with a clear error, same as Delta tables in practice):
+interval types, `variant`, `void`. Complex values arrive as native JSON, or as
+JSON strings inside CSV cells.
 
 Query it from DuckDB today:
 

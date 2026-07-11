@@ -448,7 +448,7 @@ public final class Main {
                 TableConfig cfg = e.describeTable(table);
                 if (!cfg.publish().enabled()) throw new ConfigException("table '" + table + "' has publishing disabled");
                 Path location = PublisherPlugin.resolveLocation(cfg.publish().location());
-                opts.out(Finalizer.run(location, cfg.businessKey()));
+                opts.out(Finalizer.run(location, cfg.businessKey(), cfg.publish().partitionBy()));
             }
             return 0;
         }

@@ -107,7 +107,7 @@ public final class TableCatalog {
             if (nc == null) {
                 throw new ConfigException("table '" + incoming.table() + "': column '" + oc.name() + "' cannot be removed");
             }
-            if (nc.type() != oc.type() || nc.precision() != oc.precision() || nc.scale() != oc.scale()) {
+            if (!nc.type().equals(oc.type())) {
                 throw new ConfigException("table '" + incoming.table() + "': column '" + oc.name()
                         + "' type change " + oc.typeDeclaration() + " -> " + nc.typeDeclaration() + " is not allowed");
             }

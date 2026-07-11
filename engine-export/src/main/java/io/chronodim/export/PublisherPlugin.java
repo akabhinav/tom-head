@@ -125,20 +125,28 @@ public final class PublisherPlugin implements EnginePlugin {
                     }
                 }
             }
-            // Remove parts orphaned by a crash between file write and log write.
-            try (DirectoryStream<Path> ds = Files.newDirectoryStream(t.location.resolve(PublishedContract.DATA_DIR), "part-*.jsonl")) {
-                for (Path p : ds) {
-                    if (!referenced.contains(PublishedContract.DATA_DIR + "/" + p.getFileName())) {
+            // Remove parts orphaned by a crash between file write and log write
+            // (recursive: partitioned tables nest parts in col=value directories).
+            Path dataDir = t.location.resolve(PublishedContract.DATA_DIR);
+            try (var walk = Files.walk(dataDir)) {
+                for (Path p : walk.toList()) {
+                    if (Files.isDirectory(p)) continue;
+                    String name = p.getFileName().toString();
+                    if (!name.startsWith("part-") || !name.endsWith(".jsonl")) continue;
+                    String rel = t.location.relativize(p).toString().replace('\\', '/');
+                    if (!referenced.contains(rel)) {
                         Files.deleteIfExists(p);
                     }
                 }
             }
             // Ship the view template + contract descriptor once.
+            boolean partitioned = !t.rt.config().publish().partitionBy().isEmpty();
             Path view = t.location.resolve("scd2_view.sql");
             if (!Files.exists(view)) {
+                String glob = partitioned ? "/data/**/*.jsonl" : "/data/*.jsonl";
                 Files.writeString(view, PublishedContract.viewTemplate(
                         t.rt.config().table(),
-                        "read_json_auto('" + t.location.toAbsolutePath() + "/data/*.jsonl')",
+                        "read_json_auto('" + t.location.toAbsolutePath() + glob + "')",
                         t.rt.config().businessKey()));
             }
             Path contract = t.location.resolve("_contract.json");
@@ -155,6 +163,7 @@ public final class PublisherPlugin implements EnginePlugin {
                 c.put("system_columns", List.of(PublishedContract.VALID_FROM, PublishedContract.VALID_TO,
                         PublishedContract.TX_TIME, PublishedContract.TXN_ID, PublishedContract.OP,
                         PublishedContract.SCHEMA_VERSION));
+                c.put("partition_by", t.rt.config().publish().partitionBy());
                 Files.writeString(contract, Json.writePretty(c));
             }
         } catch (IOException e) {
@@ -239,20 +248,38 @@ public final class PublisherPlugin implements EnginePlugin {
     private void writePart(TableTarget t, List<Map<String, Object>> rows, long txnFrom, long txnTo, List<String> loadIds) {
         try {
             long seq = t.logSeq + 1;
+            List<String> partitionBy = t.rt.config().publish().partitionBy();
+
+            // Hive-style partitioning: one part per touched partition per cycle.
+            Map<String, List<Map<String, Object>>> byPartition = new LinkedHashMap<>();
+            for (Map<String, Object> r : rows) {
+                byPartition.computeIfAbsent(PublishedContract.partitionPath(partitionBy, r), x -> new ArrayList<>()).add(r);
+            }
+
             String partName = String.format("part-%020d-%020d.jsonl", txnFrom, txnTo);
-            Path tmp = t.location.resolve(PublishedContract.DATA_DIR).resolve(partName + ".tmp");
-            StringBuilder sb = new StringBuilder(rows.size() * 128);
-            for (Map<String, Object> r : rows) sb.append(Json.write(r)).append('\n');
-            Files.writeString(tmp, sb.toString());
-            Path part = t.location.resolve(PublishedContract.DATA_DIR).resolve(partName);
-            Files.move(tmp, part, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            List<Map<String, Object>> files = new ArrayList<>();
+            for (Map.Entry<String, List<Map<String, Object>>> pe : byPartition.entrySet()) {
+                Path dir = t.location.resolve(PublishedContract.DATA_DIR);
+                String relDir = PublishedContract.DATA_DIR;
+                if (!pe.getKey().isEmpty()) {
+                    dir = dir.resolve(pe.getKey());
+                    relDir = relDir + "/" + pe.getKey();
+                }
+                Files.createDirectories(dir);
+                StringBuilder sb = new StringBuilder(pe.getValue().size() * 128);
+                for (Map<String, Object> r : pe.getValue()) sb.append(Json.write(r)).append('\n');
+                Path tmp = dir.resolve(partName + ".tmp");
+                Files.writeString(tmp, sb.toString());
+                Files.move(tmp, dir.resolve(partName), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                files.add(Map.of("path", relDir + "/" + partName, "rows", (long) pe.getValue().size()));
+            }
 
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("seq", seq);
             entry.put("txn_from", txnFrom);
             entry.put("txn_to", txnTo);
             entry.put("rows", (long) rows.size());
-            entry.put("files", List.of(Map.of("path", PublishedContract.DATA_DIR + "/" + partName, "rows", (long) rows.size())));
+            entry.put("files", files);
             entry.put("engine", Map.of("name", "chronodim", "format", "chronodim-open-v1"));
             entry.put("load_ids", loadIds.stream().distinct().toList());
             entry.put("created_ms", System.currentTimeMillis());

@@ -142,19 +142,24 @@ public final class Codecs {
 
     // ---- business key encoding -------------------------------------------------
 
-    private static final byte[] TYPE_TAGS = new byte[ColumnType.values().length];
-    static {
-        for (ColumnType t : ColumnType.values()) TYPE_TAGS[t.ordinal()] = (byte) (t.ordinal() + 1);
+    private static byte tagOf(io.chronodim.api.DataType t) {
+        ColumnType kind = switch (t) {
+            case io.chronodim.api.DataType.Scalar s -> s.kind();
+            case io.chronodim.api.DataType.Array a -> ColumnType.ARRAY;
+            case io.chronodim.api.DataType.MapType m -> ColumnType.MAP;
+            case io.chronodim.api.DataType.Struct s -> ColumnType.STRUCT;
+        };
+        return (byte) (kind.ordinal() + 1); // frozen: ordinals are append-only
     }
 
-    /** Canonical byte encoding of business key values in config order. */
+    /** Canonical byte encoding of business key values in config order (scalars only). */
     public static byte[] encodeBusinessKey(List<Column> keyColumns, Object[] values) {
         Buf buf = new Buf(32);
         for (int i = 0; i < keyColumns.size(); i++) {
             Column c = keyColumns.get(i);
             Object v = values[i];
             if (v == null) throw new ValidationException("business key column '" + c.name() + "' is null");
-            buf.u8(TYPE_TAGS[c.type().ordinal()]);
+            buf.u8(tagOf(c.type()));
             writeTyped(buf, c.type(), v);
         }
         return buf.toArray();
@@ -164,33 +169,103 @@ public final class Codecs {
         return XxHash64.hash(bkBytes);
     }
 
-    /** Change-detection hash over tracked columns (§5.2). */
+    /** Change-detection hash over tracked columns (§5.2). Tag+null-flag+bytes, recursively. */
     public static long attrHash(TableSchema schema, List<String> trackedColumns, java.util.Map<String, Object> row) {
         Buf buf = new Buf(64);
         for (String name : trackedColumns) {
             Column c = schema.column(name);
-            Object v = row.get(name);
-            buf.u8(TYPE_TAGS[c.type().ordinal()]);
-            if (v == null) {
-                buf.u8(0);
-            } else {
-                buf.u8(1);
-                writeTyped(buf, c.type(), v);
-            }
+            hashTyped(buf, c.type(), row.get(name));
         }
         return XxHash64.hash(buf.array(), 0, buf.size(), 0);
     }
 
-    private static void writeTyped(Buf buf, ColumnType t, Object v) {
+    private static void hashTyped(Buf buf, io.chronodim.api.DataType t, Object v) {
+        buf.u8(tagOf(t));
+        if (v == null) {
+            buf.u8(0);
+            return;
+        }
+        buf.u8(1);
         switch (t) {
+            case io.chronodim.api.DataType.Scalar s -> writeScalar(buf, s, v);
+            case io.chronodim.api.DataType.Array a -> {
+                List<?> l = (List<?>) v;
+                buf.u32(l.size());
+                for (Object e : l) hashTyped(buf, a.element(), e);
+            }
+            case io.chronodim.api.DataType.MapType m -> {
+                java.util.Map<?, ?> mv = (java.util.Map<?, ?>) v;
+                buf.u32(mv.size());
+                for (java.util.Map.Entry<?, ?> e : mv.entrySet()) {
+                    hashTyped(buf, m.key(), e.getKey());
+                    hashTyped(buf, m.value(), e.getValue());
+                }
+            }
+            case io.chronodim.api.DataType.Struct st -> {
+                java.util.Map<?, ?> mv = (java.util.Map<?, ?>) v;
+                for (io.chronodim.api.DataType.Struct.Field f : st.fields()) {
+                    hashTyped(buf, f.type(), mv.get(f.name()));
+                }
+            }
+        }
+    }
+
+    private static void writeTyped(Buf buf, io.chronodim.api.DataType t, Object v) {
+        switch (t) {
+            case io.chronodim.api.DataType.Scalar s -> writeScalar(buf, s, v);
+            case io.chronodim.api.DataType.Array a -> {
+                List<?> l = (List<?>) v;
+                buf.u32(l.size());
+                for (Object e : l) {
+                    if (e == null) {
+                        buf.u8(0);
+                    } else {
+                        buf.u8(1);
+                        writeTyped(buf, a.element(), e);
+                    }
+                }
+            }
+            case io.chronodim.api.DataType.MapType m -> {
+                java.util.Map<?, ?> mv = (java.util.Map<?, ?>) v;
+                buf.u32(mv.size());
+                for (java.util.Map.Entry<?, ?> e : mv.entrySet()) {
+                    writeTyped(buf, m.key(), e.getKey()); // map keys are non-null scalars
+                    if (e.getValue() == null) {
+                        buf.u8(0);
+                    } else {
+                        buf.u8(1);
+                        writeTyped(buf, m.value(), e.getValue());
+                    }
+                }
+            }
+            case io.chronodim.api.DataType.Struct st -> {
+                java.util.Map<?, ?> mv = (java.util.Map<?, ?>) v;
+                for (io.chronodim.api.DataType.Struct.Field f : st.fields()) {
+                    Object fv = mv.get(f.name());
+                    if (fv == null) {
+                        buf.u8(0);
+                    } else {
+                        buf.u8(1);
+                        writeTyped(buf, f.type(), fv);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void writeScalar(Buf buf, io.chronodim.api.DataType.Scalar s, Object v) {
+        switch (s.kind()) {
             case STRING -> {
                 byte[] b = ((String) v).getBytes(StandardCharsets.UTF_8);
                 buf.u32(b.length).bytes(b);
             }
-            case LONG, TIMESTAMP -> buf.u64((Long) v);
+            case LONG, TIMESTAMP, TIMESTAMP_NTZ -> buf.u64((Long) v);
             case DOUBLE -> buf.u64(Double.doubleToLongBits((Double) v));
+            case FLOAT -> buf.u32(Float.floatToIntBits((Float) v));
             case BOOLEAN -> buf.u8((Boolean) v ? 1 : 0);
-            case DATE -> buf.u32((Integer) v);
+            case DATE, INT -> buf.u32(((Number) v).intValue());
+            case SMALLINT -> buf.u16(((Number) v).shortValue() & 0xFFFF);
+            case TINYINT -> buf.u8(((Number) v).byteValue() & 0xFF);
             case DECIMAL -> {
                 byte[] b = ((BigDecimal) v).unscaledValue().toByteArray();
                 buf.u32(b.length).bytes(b);
@@ -199,30 +274,65 @@ public final class Codecs {
                 byte[] b = (byte[]) v;
                 buf.u32(b.length).bytes(b);
             }
+            case ARRAY, MAP, STRUCT -> throw new IllegalStateException("nested kind in scalar writer");
         }
     }
 
-    private static Object readTyped(ByteBuffer b, Column c) {
-        return switch (c.type()) {
-            case STRING -> {
-                byte[] s = new byte[b.getInt()];
-                b.get(s);
-                yield new String(s, StandardCharsets.UTF_8);
+    private static Object readTyped(ByteBuffer b, io.chronodim.api.DataType t) {
+        return switch (t) {
+            case io.chronodim.api.DataType.Scalar s -> readScalar(b, s);
+            case io.chronodim.api.DataType.Array a -> {
+                int n = b.getInt();
+                List<Object> out = new java.util.ArrayList<>(n);
+                for (int i = 0; i < n; i++) {
+                    out.add(b.get() == 0 ? null : readTyped(b, a.element()));
+                }
+                yield out;
             }
-            case LONG, TIMESTAMP -> b.getLong();
+            case io.chronodim.api.DataType.MapType m -> {
+                int n = b.getInt();
+                java.util.Map<Object, Object> out = new java.util.LinkedHashMap<>();
+                for (int i = 0; i < n; i++) {
+                    Object k = readTyped(b, m.key());
+                    out.put(k, b.get() == 0 ? null : readTyped(b, m.value()));
+                }
+                yield out;
+            }
+            case io.chronodim.api.DataType.Struct st -> {
+                java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
+                for (io.chronodim.api.DataType.Struct.Field f : st.fields()) {
+                    out.put(f.name(), b.get() == 0 ? null : readTyped(b, f.type()));
+                }
+                yield out;
+            }
+        };
+    }
+
+    private static Object readScalar(ByteBuffer b, io.chronodim.api.DataType.Scalar s) {
+        return switch (s.kind()) {
+            case STRING -> {
+                byte[] u = new byte[b.getInt()];
+                b.get(u);
+                yield new String(u, StandardCharsets.UTF_8);
+            }
+            case LONG, TIMESTAMP, TIMESTAMP_NTZ -> b.getLong();
             case DOUBLE -> Double.longBitsToDouble(b.getLong());
+            case FLOAT -> Float.intBitsToFloat(b.getInt());
             case BOOLEAN -> b.get() != 0;
-            case DATE -> b.getInt();
+            case DATE, INT -> b.getInt();
+            case SMALLINT -> b.getShort();
+            case TINYINT -> b.get();
             case DECIMAL -> {
                 byte[] u = new byte[b.getInt()];
                 b.get(u);
-                yield new BigDecimal(new BigInteger(u), c.scale());
+                yield new BigDecimal(new BigInteger(u), s.scale());
             }
             case BYTES -> {
                 byte[] u = new byte[b.getInt()];
                 b.get(u);
                 yield u;
             }
+            case ARRAY, MAP, STRUCT -> throw new IllegalStateException("nested kind in scalar reader");
         };
     }
 
@@ -273,7 +383,7 @@ public final class Codecs {
         TableSchema schema = schemaLookup.apply(schemaVersion);
         Object[] payload = new Object[schema.columns().size()];
         for (int i = 0; i < payload.length; i++) {
-            if (b.get() != 0) payload[i] = readTyped(b, schema.columns().get(i));
+            if (b.get() != 0) payload[i] = readTyped(b, schema.columns().get(i).type());
         }
         return new DecodedValue(op, validTo, txTime, txnId, schemaVersion, attrHash, bk, payload);
     }

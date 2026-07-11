@@ -19,7 +19,7 @@ import java.util.Random;
  */
 public final class DataGen {
 
-    /** The standard differential-test table: every column type, source valid time. */
+    /** The standard differential-test table: every column type incl. nested, source valid time. */
     public static TableConfig testTable(String name) {
         return TableConfigIO.fromYaml("""
                 table: %s
@@ -34,9 +34,14 @@ public final class DataGen {
                   - {name: onboarded,   type: date}
                   - {name: score_count, type: long}
                   - {name: token,       type: bytes}
+                  - {name: ratio,       type: float}
+                  - {name: branch_no,   type: int}
+                  - {name: tags,        type: "array<string>"}
+                  - {name: address,     type: "struct<city:string,zip:string>"}
+                  - {name: limits,      type: "map<string,long>"}
                   - {name: updated_at,  type: timestamp}
                   - {name: noise,       type: string}
-                tracked_columns: [name, segment, risk_score, exposure, active, onboarded, score_count, token]
+                tracked_columns: [name, segment, risk_score, exposure, active, onboarded, score_count, token, ratio, branch_no, tags, address, limits]
                 ignored_columns: [noise]
                 valid_time:
                   mode: source_column
@@ -123,6 +128,19 @@ public final class DataGen {
             byte[] token = new byte[8];
             rnd.nextBytes(token);
             v.put("token", token);
+            v.put("ratio", rnd.nextInt(1000) / 8f);
+            v.put("branch_no", rnd.nextInt(9999));
+            v.put("tags", rnd.nextBoolean()
+                    ? List.of("t" + rnd.nextInt(5), "t" + rnd.nextInt(5))
+                    : List.of("solo-" + rnd.nextInt(3)));
+            Map<String, Object> addr = new LinkedHashMap<>();
+            addr.put("city", "City" + rnd.nextInt(20));
+            addr.put("zip", String.valueOf(1000 + rnd.nextInt(9000)));
+            v.put("address", addr);
+            Map<String, Object> limits = new LinkedHashMap<>();
+            limits.put("daily", (long) rnd.nextInt(100000));
+            if (rnd.nextBoolean()) limits.put("monthly", (long) rnd.nextInt(1000000));
+            v.put("limits", limits);
             Map<String, Object> tracked = new LinkedHashMap<>(v);
             tracked.remove("customer_id");
             lastValues.put(key, tracked);

@@ -64,7 +64,11 @@ public record TableConfig(
 
         TableSchema current = schemaHistory.getLast();
         for (String k : businessKey) {
-            if (current.column(k) == null) throw new ConfigException("table '" + table + "': business_key column '" + k + "' not in schema");
+            Column bc = current.column(k);
+            if (bc == null) throw new ConfigException("table '" + table + "': business_key column '" + k + "' not in schema");
+            if (!bc.isScalar()) {
+                throw new ConfigException("table '" + table + "': business_key column '" + k + "' must be a scalar type, not " + bc.typeDeclaration());
+            }
         }
         for (String c : trackedColumns) {
             if (current.column(c) == null) throw new ConfigException("table '" + table + "': tracked column '" + c + "' not in schema");
@@ -78,8 +82,19 @@ public record TableConfig(
             if (validTimeColumn == null) throw new ConfigException("table '" + table + "': valid_time.mode=source_column requires valid_time.column");
             Column vc = current.column(validTimeColumn);
             if (vc == null) throw new ConfigException("table '" + table + "': valid_time.column '" + validTimeColumn + "' not in schema");
-            if (vc.type() != ColumnType.TIMESTAMP && vc.type() != ColumnType.DATE) {
-                throw new ConfigException("table '" + table + "': valid_time.column must be timestamp or date");
+            ColumnType vk = vc.kind();
+            if (vk != ColumnType.TIMESTAMP && vk != ColumnType.TIMESTAMP_NTZ && vk != ColumnType.DATE) {
+                throw new ConfigException("table '" + table + "': valid_time.column must be timestamp, timestamp_ntz or date");
+            }
+        }
+        for (String pc : publish.partitionBy()) {
+            Column col = current.column(pc);
+            if (col == null) {
+                throw new ConfigException("table '" + table + "': publish.partition_by column '" + pc + "' not in schema");
+            }
+            if (!col.isScalar()) {
+                throw new ConfigException("table '" + table + "': publish.partition_by column '" + pc
+                        + "' must be a scalar type, not " + col.typeDeclaration());
             }
         }
         for (QualityGate g : qualityGates) {

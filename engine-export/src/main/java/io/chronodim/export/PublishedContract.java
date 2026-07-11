@@ -45,6 +45,39 @@ public final class PublishedContract {
     public static final String DATA_DIR = "data";
     public static final String FINALIZED_DIR = "finalized";
 
+    /**
+     * Hive-style partition path for a rendered row, e.g. {@code region=EU/year=2026}.
+     * Partition column values stay in the row payload as well — Spark merges
+     * directory-derived partition columns with the data schema (data wins), and
+     * plain glob readers keep working.
+     */
+    public static String partitionPath(java.util.List<String> partitionBy, java.util.Map<String, Object> renderedRow) {
+        if (partitionBy.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (String col : partitionBy) {
+            if (sb.length() > 0) sb.append('/');
+            Object v = renderedRow.get(col);
+            sb.append(col).append('=').append(v == null ? "__HIVE_DEFAULT_PARTITION__" : encodePartitionValue(String.valueOf(v)));
+        }
+        return sb.toString();
+    }
+
+    /** Hive-compatible percent-encoding of partition values for safe directory names. */
+    public static String encodePartitionValue(String v) {
+        StringBuilder sb = new StringBuilder(v.length());
+        for (int i = 0; i < v.length(); i++) {
+            char c = v.charAt(i);
+            if (Character.isLetterOrDigit(c) || c == '.' || c == '-' || c == '_' || c == ':' || c == '+') {
+                sb.append(c);
+            } else {
+                for (byte b : String.valueOf(c).getBytes(java.nio.charset.StandardCharsets.UTF_8)) {
+                    sb.append('%').append(String.format("%02X", b));
+                }
+            }
+        }
+        return sb.toString();
+    }
+
     /** SQL view template with placeholders {table}, {source}, {bk_cols}. */
     public static String viewTemplate(String table, String source, java.util.List<String> bkCols) {
         String bk = String.join(", ", bkCols);

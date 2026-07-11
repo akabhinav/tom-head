@@ -106,13 +106,24 @@ DATA values — fixed header at fixed offsets, then business key, then payload:
 [u16 bk_len][business-key bytes]
 payload: per column of schema(schema_version), in declared order:
   [u8 present 0|1] then, when present:
-    string/bytes:  [u32 len][bytes]        (strings are UTF-8)
-    long/timestamp:[i64]
-    double:        [u64 raw IEEE bits]
-    boolean:       [u8]
-    date:          [i32 epoch days]
-    decimal(p,s):  [u32 len][unscaled two's-complement bytes]  (scale from schema)
+    string/bytes:      [u32 len][bytes]        (strings are UTF-8)
+    long/timestamp(_ntz): [i64]
+    double:            [u64 raw IEEE bits]
+    float:             [u32 raw IEEE bits]
+    boolean:           [u8]
+    date/int:          [i32]
+    smallint:          [i16]
+    tinyint:           [i8]
+    decimal(p,s):      [u32 len][unscaled two's-complement bytes]  (scale from schema)
+    array<T>:          [u32 count] count × ([u8 present][T])
+    map<K,V>:          [u32 count] count × ([K key][u8 present][V])   (keys non-null scalars)
+    struct<...>:       per declared field: [u8 present][field type]
 ```
+
+Type tags (business-key encoding and attr-hash canonical form) are the
+ColumnType ordinal + 1 and are **append-only**: STRING=1, LONG=2, DOUBLE=3,
+BOOLEAN=4, DATE=5, TIMESTAMP=6, DECIMAL=7, BYTES=8, INT=9, SMALLINT=10,
+TINYINT=11, FLOAT=12, TIMESTAMP_NTZ=13, ARRAY=14, MAP=15, STRUCT=16.
 
 **Superseding, not overwriting**: closing or correcting a version writes a
 *new* record with the same `valid_from` and the current `tx_time` (patched
@@ -212,12 +223,15 @@ ISO-8601 UTC, decimals as plain strings, bytes as base64) plus:
 Layout at each `publish.location`:
 
 ```
-_contract.json        machine-readable descriptor of the above
+_contract.json        machine-readable descriptor of the above (incl. partition_by)
 scd2_view.sql         LEAD()-based view template (latest belief per (bk, _valid_from))
 _chronodim_log/       %020d.json commit entries — the reader's source of truth
-data/part-*.jsonl     append-only version records, exactly-once via the log
-finalized/log-*.jsonl     consolidated full log (after `finalize`)
-finalized/current-*.jsonl materialized current snapshot with _is_current
+data/[col=value/...]part-*.jsonl   append-only version records, exactly-once via
+                      the log; Hive-style partition dirs when publish.partition_by
+                      is set (values percent-encoded, null → __HIVE_DEFAULT_PARTITION__;
+                      partition values are ALSO kept in the row payload)
+finalized/[col=value/...]log-*.jsonl      consolidated full log (after `finalize`)
+finalized/[col=value/...]current-*.jsonl  materialized current snapshot with _is_current
 ```
 
 Exactly-once (R-PUB-2): the publisher's watermark is the max `txn_to` in the

@@ -280,7 +280,7 @@ public final class ReferenceScd2 {
         TableSchema schema = cfg.currentSchema();
         Map<String, Object> row = new LinkedHashMap<>();
         for (Column c : schema.columns()) {
-            row.put(c.name(), c.type().coerce(in.values().get(c.name()), c.scale()));
+            row.put(c.name(), c.type().coerce(in.values().get(c.name())));
         }
         for (String k : cfg.businessKey()) {
             if (row.get(k) == null) throw new ValidationException("null business key");
@@ -290,7 +290,7 @@ public final class ReferenceScd2 {
             Object v = row.get(cfg.validTimeColumn());
             if (v == null) throw new ValidationException("null valid time");
             Column vc = schema.column(cfg.validTimeColumn());
-            vf = vc.type() == ColumnType.DATE ? (Integer) v * 86_400_000_000L : (Long) v;
+            vf = vc.kind() == ColumnType.DATE ? (Integer) v * 86_400_000_000L : (Long) v;
         } else {
             vf = loadTime;
         }

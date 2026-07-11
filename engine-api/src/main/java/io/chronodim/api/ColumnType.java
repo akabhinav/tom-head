@@ -26,35 +26,23 @@ import java.util.Locale;
  * </ul>
  */
 public enum ColumnType {
-    STRING, LONG, DOUBLE, BOOLEAN, DATE, TIMESTAMP, DECIMAL, BYTES;
+    // Frozen on-disk type tags derive from ordinals — append only, never reorder.
+    STRING, LONG, DOUBLE, BOOLEAN, DATE, TIMESTAMP, DECIMAL, BYTES,
+    INT, SMALLINT, TINYINT, FLOAT, TIMESTAMP_NTZ,
+    ARRAY, MAP, STRUCT;
 
-    /** Parses a type declaration such as {@code string} or {@code decimal(18,4)}. */
+    /** True for the container kinds whose semantics live in {@link DataType}. */
+    public boolean isNested() {
+        return this == ARRAY || this == MAP || this == STRUCT;
+    }
+
+    /** Parses a type declaration such as {@code string}, {@code decimal(18,4)} or {@code array<int>}. */
     public static Column parseDeclaration(String name, String decl) {
-        String d = decl.trim().toLowerCase(Locale.ROOT);
-        if (d.startsWith("decimal")) {
-            int open = d.indexOf('('), close = d.indexOf(')');
-            if (open < 0 || close < open) {
-                throw new ConfigException("column '" + name + "': decimal type requires precision/scale, e.g. decimal(18,4)");
-            }
-            String[] ps = d.substring(open + 1, close).split(",");
-            if (ps.length != 2) throw new ConfigException("column '" + name + "': bad decimal declaration '" + decl + "'");
-            int p = Integer.parseInt(ps[0].trim()), s = Integer.parseInt(ps[1].trim());
-            if (p < 1 || p > 38 || s < 0 || s > p) {
-                throw new ConfigException("column '" + name + "': decimal(" + p + "," + s + ") out of range (1<=p<=38, 0<=s<=p)");
-            }
-            return new Column(name, DECIMAL, p, s);
+        try {
+            return new Column(name, DataType.parse(decl));
+        } catch (ConfigException e) {
+            throw new ConfigException("column '" + name + "': " + e.getMessage());
         }
-        ColumnType t = switch (d) {
-            case "string" -> STRING;
-            case "long", "int", "integer", "bigint" -> LONG;
-            case "double", "float" -> DOUBLE;
-            case "boolean", "bool" -> BOOLEAN;
-            case "date" -> DATE;
-            case "timestamp" -> TIMESTAMP;
-            case "bytes", "binary" -> BYTES;
-            default -> throw new ConfigException("column '" + name + "': unknown type '" + decl + "'");
-        };
-        return new Column(name, t, 0, 0);
     }
 
     /**
@@ -109,6 +97,23 @@ public enum ColumnType {
                     case String s -> s.isEmpty() ? null : Base64.getDecoder().decode(s.trim());
                     default -> throw bad(v);
                 };
+                case INT -> intLike(v, Integer.MIN_VALUE, Integer.MAX_VALUE, Long::intValue);
+                case SMALLINT -> intLike(v, Short.MIN_VALUE, Short.MAX_VALUE, l -> (short) l.longValue());
+                case TINYINT -> intLike(v, Byte.MIN_VALUE, Byte.MAX_VALUE, l -> (byte) l.longValue());
+                case FLOAT -> switch (v) {
+                    case Float f -> f;
+                    case Number n -> (float) n.doubleValue();
+                    case String s -> s.isEmpty() ? null : Float.valueOf(Float.parseFloat(s.trim()));
+                    default -> throw bad(v);
+                };
+                case TIMESTAMP_NTZ -> switch (v) {
+                    case Long l -> l;
+                    case Number n -> exactLong(n);
+                    case String s -> s.isEmpty() ? null : Long.valueOf(parseTimestampMicros(s.trim()));
+                    default -> throw bad(v);
+                };
+                case ARRAY, MAP, STRUCT ->
+                        throw new ValidationException("internal: nested type coerced without DataType context");
             };
         } catch (ValidationException e) {
             throw e;
@@ -123,10 +128,22 @@ public enum ColumnType {
         return switch (this) {
             case DATE -> LocalDate.ofEpochDay(((Integer) v).longValue()).toString();
             case TIMESTAMP -> formatTimestampMicros((Long) v);
+            case TIMESTAMP_NTZ -> formatTimestampNtzMicros((Long) v);
             case DECIMAL -> ((BigDecimal) v).toPlainString();
             case BYTES -> Base64.getEncoder().encodeToString((byte[]) v);
             default -> v;
         };
+    }
+
+    private static Number intLike(Object v, long min, long max, java.util.function.Function<Long, Number> narrow) {
+        Long l = switch (v) {
+            case Number n -> exactLong(n);
+            case String s -> s.isEmpty() ? null : Long.valueOf(Long.parseLong(s.trim()));
+            default -> throw new ValidationException("value of class " + v.getClass().getName() + " not valid for integer type");
+        };
+        if (l == null) return null;
+        if (l < min || l > max) throw new ValidationException("value " + l + " outside [" + min + ", " + max + "]");
+        return narrow.apply(l); // canonical form is the exact-width boxed type
     }
 
     /** Parses an ISO-8601 instant / offset datetime / local date, or a raw epoch-micros long. */
@@ -155,6 +172,13 @@ public enum ColumnType {
         long secs = Math.floorDiv(micros, 1_000_000L);
         long rem = Math.floorMod(micros, 1_000_000L);
         return Instant.ofEpochSecond(secs, rem * 1_000L).toString();
+    }
+
+    /** NTZ rendering: local ISO-8601 without a zone suffix (matches Spark TIMESTAMP_NTZ). */
+    public static String formatTimestampNtzMicros(long micros) {
+        long secs = Math.floorDiv(micros, 1_000_000L);
+        long rem = Math.floorMod(micros, 1_000_000L);
+        return java.time.LocalDateTime.ofEpochSecond(secs, (int) (rem * 1_000L), ZoneOffset.UTC).toString();
     }
 
     static byte[] utf8(String s) {

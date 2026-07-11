@@ -144,7 +144,7 @@ public final class Scd2Applier {
         Map<String, Object> values = new LinkedHashMap<>();
         for (Column col : schema.columns()) {
             Object raw = in.values().get(col.name());
-            values.put(col.name(), col.type().coerce(raw, col.scale()));
+            values.put(col.name(), col.type().coerce(raw));
         }
         Object[] bkValues = new Object[bkCols.size()];
         for (int i = 0; i < bkCols.size(); i++) {
@@ -159,7 +159,7 @@ public final class Scd2Applier {
             Object v = values.get(cfg.validTimeColumn());
             if (v == null) throw new ValidationException("valid_time column '" + cfg.validTimeColumn() + "' is null");
             Column vc = schema.column(cfg.validTimeColumn());
-            validFrom = vc.type() == ColumnType.DATE ? (Integer) v * 86_400_000_000L : (Long) v;
+            validFrom = vc.kind() == ColumnType.DATE ? (Integer) v * 86_400_000_000L : (Long) v;
         } else {
             validFrom = txTime;
         }
