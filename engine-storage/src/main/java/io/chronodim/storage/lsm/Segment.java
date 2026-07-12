@@ -174,6 +174,16 @@ final class Segment implements AutoCloseable {
         return new SegmentIterator(start, prefix);
     }
 
+    /** Unbounded ascending iterator positioned near {@code startKey} (may emit a few earlier keys; caller skips). */
+    SegmentIterator iterateFrom(byte[] startKey) {
+        long start = 4;
+        if (startKey.length > 0) {
+            int block = floorBlock(startKey);
+            if (block >= 0) start = sparseOffsets[block];
+        }
+        return new SegmentIterator(start, io.chronodim.storage.util.Bytes.EMPTY);
+    }
+
     /** Greatest sparse block whose first key is <= key; -1 when key precedes everything. */
     private int floorBlock(byte[] key) {
         int lo = 0, hi = sparseKeys.length - 1, ans = -1;

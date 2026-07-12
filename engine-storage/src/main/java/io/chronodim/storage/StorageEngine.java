@@ -32,6 +32,24 @@ public interface StorageEngine extends AutoCloseable {
     /** Snapshot-consistent iterator over all keys with the given prefix, ascending. */
     CloseableKvIterator prefixScan(byte[] prefix);
 
+    /**
+     * A reusable positioned iterator for hot-path batch reads (R-PERF-3): one
+     * object serves many entities via repeated {@link SeekIterator#seekFirst}.
+     * The view is fixed at creation time; the caller checks prefix bounds.
+     */
+    SeekIterator seekIterator();
+
+    interface SeekIterator extends AutoCloseable {
+        /** First entry with key >= prefix, or null. Resets the cursor. */
+        KV seekFirst(byte[] prefix);
+
+        /** Next entry after the last returned one, or null at the end. */
+        KV next();
+
+        @Override
+        void close();
+    }
+
     /** Applies all mutations atomically, tagged with the creating engine txn. */
     void write(AtomicBatch batch, long txnId);
 

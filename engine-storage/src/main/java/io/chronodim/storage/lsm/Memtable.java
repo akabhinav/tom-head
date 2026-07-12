@@ -60,4 +60,9 @@ final class Memtable {
     Iterator<Map.Entry<byte[], byte[]>> all() {
         return map.entrySet().iterator();
     }
+
+    /** Ascending iterator from {@code start} (inclusive) to the end; tombstones included. */
+    Iterator<Map.Entry<byte[], byte[]>> from(byte[] start) {
+        return map.tailMap(start, true).entrySet().iterator();
+    }
 }

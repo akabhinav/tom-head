@@ -125,6 +125,32 @@ public final class RocksDbStorageEngine implements StorageEngine {
     }
 
     @Override
+    public SeekIterator seekIterator() {
+        checkOpen();
+        ReadOptions ro = new ReadOptions().setTotalOrderSeek(true);
+        RocksIterator it = db.newIterator(ro);
+        return new SeekIterator() {
+            @Override
+            public KV seekFirst(byte[] prefix) {
+                it.seek(prefix);
+                return it.isValid() ? new KV(it.key(), it.value()) : null;
+            }
+
+            @Override
+            public KV next() {
+                it.next();
+                return it.isValid() ? new KV(it.key(), it.value()) : null;
+            }
+
+            @Override
+            public void close() {
+                it.close();
+                ro.close();
+            }
+        };
+    }
+
+    @Override
     public void write(AtomicBatch batch, long txnId) {
         checkOpen();
         try (WriteBatch wb = new WriteBatch()) {

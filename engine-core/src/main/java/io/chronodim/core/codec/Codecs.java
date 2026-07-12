@@ -152,9 +152,16 @@ public final class Codecs {
         return (byte) (kind.ordinal() + 1); // frozen: ordinals are append-only
     }
 
+    /**
+     * Reused per-thread scratch buffer for the three hot encoders (R-PERF-1).
+     * Safe because none of them call each other; each resets before use.
+     */
+    private static final ThreadLocal<Buf> SCRATCH = ThreadLocal.withInitial(() -> new Buf(512));
+
     /** Canonical byte encoding of business key values in config order (scalars only). */
     public static byte[] encodeBusinessKey(List<Column> keyColumns, Object[] values) {
-        Buf buf = new Buf(32);
+        Buf buf = SCRATCH.get();
+        buf.reset();
         for (int i = 0; i < keyColumns.size(); i++) {
             Column c = keyColumns.get(i);
             Object v = values[i];
@@ -171,7 +178,8 @@ public final class Codecs {
 
     /** Change-detection hash over tracked columns (§5.2). Tag+null-flag+bytes, recursively. */
     public static long attrHash(TableSchema schema, List<String> trackedColumns, java.util.Map<String, Object> row) {
-        Buf buf = new Buf(64);
+        Buf buf = SCRATCH.get();
+        buf.reset();
         for (String name : trackedColumns) {
             Column c = schema.column(name);
             hashTyped(buf, c.type(), row.get(name));
@@ -350,7 +358,8 @@ public final class Codecs {
 
     public static byte[] encodeValue(Op op, long validTo, long txTime, long txnId, int schemaVersion,
                                      long attrHash, byte[] bkBytes, TableSchema schema, java.util.Map<String, Object> row) {
-        Buf buf = new Buf(VALUE_HEADER_LEN + bkBytes.length + 64);
+        Buf buf = SCRATCH.get();
+        buf.reset();
         buf.u8(VALUE_VERSION).u8(op.code)
                 .u64(validTo).u64(txTime).u64(txnId).u32(schemaVersion).u64(attrHash)
                 .u16(bkBytes.length).bytes(bkBytes);
@@ -469,6 +478,10 @@ public final class Codecs {
             System.arraycopy(b, 0, a, n, b.length);
             n += b.length;
             return this;
+        }
+
+        void reset() {
+            n = 0;
         }
 
         void ensure(int m) {

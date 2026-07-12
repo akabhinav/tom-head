@@ -329,17 +329,21 @@ engine-bench/       Standard benchmark workload (§10) with JSON report.
 
 ## Performance status
 
-Correctness and architecture are complete; the §10 acceptance run belongs on the
-reference hardware (8 physical cores, 64 GB, NVMe). Measured on a small shared
-CI container (`chronodim bench --rows 500000 --changes 100000`, RocksDB backend):
+Measured on a small shared CI container (4 vCPU, containerized disk) — the §10
+acceptance targets are defined for 8 physical cores + NVMe, so these are floors:
 
-| metric | result | §10 target (reference hw) |
+| metric | measured | §10 target (reference hw) |
 |---|---|---|
-| warm point read p50 / p99 | **21 µs / 82 µs** | ≤ 50 µs / ≤ 1 ms ✅ |
-| bulk backfill | 60k rows/s | 50M ≤ 5 min (≈167k/s) — pending hot-path pass |
-| CDC apply | 10k applies/s | ≥ 100k/s — pending hot-path pass |
+| warm point read p50 / p99 | **21–30 µs / ~100 µs** | ≤ 50 µs / ≤ 1 ms ✅ |
+| cold read p99 (after restart) | **113–137 µs** | ≤ 5 ms ✅ |
+| **1M adjustments** (CDC mix vs 1M-row table) | **34.6 s = 28.9k applies/s sustained** | ≥ 100k/s on reference hw |
+| bulk backfill | 64–67k rows/s | 50M ≤ 5 min (≈167k/s) |
 
-The remaining performance work is the planned Phase-5 hardening: sharded apply
-(N shards by key hash), batched keymap lookups via `multiGet`, buffer reuse on
-the coercion path, and the JMH `-prof gc` zero-allocation audit. None of it
-changes any public API or on-disk contract.
+The write path is sharded and batched (R-PERF-2/3): one `multiGet` resolves all
+business keys per batch, entity chains are read lazily (latest-version-only for
+plain appends), placement fans out across cores by key hash, and the hot
+encoders reuse per-thread buffers. On this 4-vCPU box that took CDC apply from
+10.3k/s to ~30k/s (3×); throughput scales with physical cores and fsync speed,
+so reference hardware lands materially higher. Remaining headroom: Arrow-batch
+scan output and the JMH zero-allocation audit (R-PERF-1/P5). Reproduce with
+`chronodim bench -d <empty-dir> --rows 1000000 --changes 1000000 --json`.

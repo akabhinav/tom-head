@@ -143,6 +143,34 @@ public final class LsmStorageEngine implements StorageEngine {
     }
 
     @Override
+    public SeekIterator seekIterator() {
+        // One snapshot for the whole batch of seeks: rotation happens once here,
+        // not per entity. Each seek opens a fresh merge cursor over that view.
+        KvSnapshot snap = snapshot();
+        return new SeekIterator() {
+            private CloseableKvIterator cur;
+
+            @Override
+            public KV seekFirst(byte[] prefix) {
+                if (cur != null) cur.close();
+                cur = ((LsmSnapshot) snap).scanFrom(prefix);
+                return cur.hasNext() ? cur.next() : null;
+            }
+
+            @Override
+            public KV next() {
+                return cur != null && cur.hasNext() ? cur.next() : null;
+            }
+
+            @Override
+            public void close() {
+                if (cur != null) cur.close();
+                snap.close();
+            }
+        };
+    }
+
+    @Override
     public KvSnapshot snapshot() {
         synchronized (this) {
             rotateLocked();
@@ -589,6 +617,40 @@ public final class LsmStorageEngine implements StorageEngine {
                         LsmEntry e = merge.next();
                         if (e.tombstone()) continue;
                         if (!Bytes.hasPrefix(e.key(), prefix)) continue;
+                        next = new KV(e.key(), e.value());
+                        return;
+                    }
+                }
+
+                @Override public boolean hasNext() { return next != null; }
+
+                @Override public KV next() {
+                    if (next == null) throw new NoSuchElementException();
+                    KV kv = next;
+                    advance();
+                    return kv;
+                }
+
+                @Override public void close() { merge.close(); }
+            };
+        }
+
+        /** Ascending unbounded scan from {@code start} (inclusive); caller stops when out of range. */
+        CloseableKvIterator scanFrom(byte[] start) {
+            List<Iterator<LsmEntry>> sources = new ArrayList<>(frozen.size() + segments.size());
+            for (Memtable m : frozen) sources.add(wrap(m.from(start)));
+            for (Segment s : segments) sources.add(s.iterateFrom(start));
+            MergeIterator merge = new MergeIterator(sources);
+            return new CloseableKvIterator() {
+                private KV next;
+                { advance(); }
+
+                private void advance() {
+                    next = null;
+                    while (merge.hasNext()) {
+                        LsmEntry e = merge.next();
+                        if (e.tombstone()) continue;
+                        if (Bytes.compare(e.key(), start) < 0) continue; // block floor slack
                         next = new KV(e.key(), e.value());
                         return;
                     }

@@ -40,6 +40,17 @@ public final class Scd2Applier {
     public static final class Counters {
         public long rowsIn, inserts, updates, noOps, deletes, lateSplits, rejects, quarantined;
 
+        public void add(Counters o) {
+            rowsIn += o.rowsIn;
+            inserts += o.inserts;
+            updates += o.updates;
+            noOps += o.noOps;
+            deletes += o.deletes;
+            lateSplits += o.lateSplits;
+            rejects += o.rejects;
+            quarantined += o.quarantined;
+        }
+
         public AuditManifest.TableStats toStats(String table, String configHash, int schemaVersion) {
             return new AuditManifest.TableStats(table, configHash, schemaVersion,
                     rowsIn, inserts, updates, noOps, deletes, lateSplits, rejects, quarantined);
@@ -108,23 +119,93 @@ public final class Scd2Applier {
             }
         }
 
-        // Phase 2: per entity — resolve identity, load chain, place rows, emit records.
-        Map<Long, java.util.Set<Integer>> claimedInBatch = new java.util.HashMap<>();
-        for (Map.Entry<BytesKey, List<PendingRow>> e : groups.entrySet()) {
-            byte[] bkBytes = e.getKey().bytes;
-            List<PendingRow> pending = dedupe(cfg, rt, e.getValue(), c, errors, quarantine);
-            if (pending.isEmpty()) continue;
+        // Phase 2a: resolve every entity's identity in bulk — one multiGet for all
+        // keymap entries, one more for the hashreg probe of the misses (R-PERF-3).
+        List<Map.Entry<BytesKey, List<PendingRow>>> entities = new ArrayList<>(groups.entrySet());
+        EntityRef[] refs = resolveEntities(rt, entities, out);
 
-            EntityRef ref = resolveEntity(rt, bkBytes, out, claimedInBatch);
-            List<WorkingVersion> chain = ref.isNew ? new ArrayList<>() : loadChain(rt, ref);
-
-            for (PendingRow pr : pending) {
-                placeRow(cfg, rt, chain, pr, c, errors, quarantine);
+        // Phase 2b: place rows per entity. Entities are disjoint by construction, so
+        // large batches shard across cores by key hash (R-PERF-2); each shard owns its
+        // batch + counters + seek iterator and everything merges deterministically.
+        int shardCount = entities.size() >= PARALLEL_THRESHOLD ? POOL_SIZE : 1;
+        if (shardCount <= 1) {
+            try (StorageEngine.SeekIterator it = storage.seekIterator()) {
+                for (int i = 0; i < entities.size(); i++) {
+                    processEntity(rt, refs[i], entities.get(i), it, out, c, errors, quarantine, txTime, txnId);
+                }
             }
-
-            emit(rt, ref, bkBytes, chain, schema, txTime, txnId, out);
+        } else {
+            ErrorSink syncErrors = (tbl, idx, reason) -> {
+                synchronized (errors) {
+                    errors.error(tbl, idx, reason);
+                }
+            };
+            QuarantineSink syncQuar = (rt2, vals, del, reason) -> {
+                synchronized (quarantine) {
+                    quarantine.quarantine(rt2, vals, del, reason);
+                }
+            };
+            List<List<Integer>> shards = new ArrayList<>(shardCount);
+            for (int s = 0; s < shardCount; s++) shards.add(new ArrayList<>());
+            for (int i = 0; i < entities.size(); i++) {
+                shards.get((int) Long.remainderUnsigned(refs[i].keyHash(), shardCount)).add(i);
+            }
+            List<java.util.concurrent.Future<ShardResult>> futures = new ArrayList<>(shardCount);
+            for (List<Integer> shard : shards) {
+                futures.add(POOL.submit(() -> {
+                    AtomicBatch shardOut = new AtomicBatch();
+                    Counters shardC = new Counters();
+                    try (StorageEngine.SeekIterator it = storage.seekIterator()) {
+                        for (int i : shard) {
+                            processEntity(rt, refs[i], entities.get(i), it, shardOut, shardC, syncErrors, syncQuar, txTime, txnId);
+                        }
+                    }
+                    return new ShardResult(shardOut, shardC);
+                }));
+            }
+            for (java.util.concurrent.Future<ShardResult> f : futures) {
+                try {
+                    ShardResult r = f.get();
+                    out.mutations().addAll(r.batch.mutations());
+                    c.add(r.counters);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new io.chronodim.api.ChronoDimException("interrupted during sharded apply", ie);
+                } catch (java.util.concurrent.ExecutionException ee) {
+                    if (ee.getCause() instanceof RuntimeException re) throw re;
+                    throw new io.chronodim.api.ChronoDimException("sharded apply failed", ee.getCause());
+                }
+            }
         }
         return c;
+    }
+
+    private static final int PARALLEL_THRESHOLD = 2048; // entities per batch before sharding pays off
+    private static final int POOL_SIZE = Math.max(2, Runtime.getRuntime().availableProcessors());
+    private static final java.util.concurrent.ExecutorService POOL =
+            java.util.concurrent.Executors.newFixedThreadPool(POOL_SIZE, r -> {
+                Thread t = new Thread(r, "chronodim-apply-shard");
+                t.setDaemon(true);
+                return t;
+            });
+
+    private record ShardResult(AtomicBatch batch, Counters counters) {}
+
+    private void processEntity(TableRuntime rt, EntityRef ref, Map.Entry<BytesKey, List<PendingRow>> entity,
+                               StorageEngine.SeekIterator it, AtomicBatch out, Counters c,
+                               ErrorSink errors, QuarantineSink quarantine, long txTime, long txnId) {
+        TableConfig cfg = rt.config();
+        byte[] bkBytes = entity.getKey().bytes;
+        List<PendingRow> pending = dedupe(cfg, rt, entity.getValue(), c, errors, quarantine);
+        if (pending.isEmpty()) return;
+
+        List<WorkingVersion> chain = ref.isNew()
+                ? new ArrayList<>()
+                : loadChainLazy(rt, ref, pending.get(0).validFrom, it);
+        for (PendingRow pr : pending) {
+            placeRow(cfg, rt, chain, pr, c, errors, quarantine);
+        }
+        emit(rt, ref, bkBytes, chain, cfg.currentSchema(), txTime, txnId, out);
     }
 
     // ---- phase 1 helpers -------------------------------------------------------
@@ -252,28 +333,66 @@ public final class Scd2Applier {
 
     private record EntityRef(long keyHash, int disambig, boolean isNew) {}
 
-    private EntityRef resolveEntity(TableRuntime rt, byte[] bkBytes, AtomicBatch out,
-                                    Map<Long, java.util.Set<Integer>> claimedInBatch) {
-        byte[] mapped = storage.get(Codecs.keymapKey(rt.tableId(), bkBytes));
-        if (mapped != null) {
-            Codecs.KeyRef ref = Codecs.decodeKeymapValue(mapped);
-            return new EntityRef(ref.keyHash(), ref.disambig(), false);
+    /**
+     * Bulk identity resolution: one multiGet over all keymap entries, one more
+     * over the hashreg slot-0 probes for the misses. New entities get their
+     * keymap/hashreg puts appended here (single-threaded), so shards never write
+     * identity records.
+     */
+    private EntityRef[] resolveEntities(TableRuntime rt, List<Map.Entry<BytesKey, List<PendingRow>>> entities,
+                                        AtomicBatch out) {
+        int n = entities.size();
+        EntityRef[] refs = new EntityRef[n];
+        List<byte[]> keymapKeys = new ArrayList<>(n);
+        for (Map.Entry<BytesKey, List<PendingRow>> e : entities) {
+            keymapKeys.add(Codecs.keymapKey(rt.tableId(), e.getKey().bytes));
         }
-        long hash = Codecs.businessKeyHash(bkBytes);
-        java.util.Set<Integer> claimedNow = claimedInBatch.computeIfAbsent(hash, h -> new java.util.HashSet<>());
-        int disambig = 0;
-        while (true) {
-            if (!claimedNow.contains(disambig)) {
-                byte[] claimed = storage.get(Codecs.hashregKey(rt.tableId(), hash, disambig));
-                if (claimed == null || Arrays.equals(claimed, bkBytes)) break; // free, or self-heal
+        List<byte[]> mapped = storage.multiGet(keymapKeys);
+
+        List<Integer> misses = new ArrayList<>();
+        long[] hashes = new long[n];
+        for (int i = 0; i < n; i++) {
+            byte[] m = mapped.get(i);
+            if (m != null) {
+                Codecs.KeyRef ref = Codecs.decodeKeymapValue(m);
+                refs[i] = new EntityRef(ref.keyHash(), ref.disambig(), false);
+            } else {
+                hashes[i] = Codecs.businessKeyHash(entities.get(i).getKey().bytes);
+                misses.add(i);
             }
-            disambig++;
-            if (disambig > 0xFFFF) throw new ValidationException("hash collision chain exhausted (impossible)");
         }
-        claimedNow.add(disambig);
-        out.put(Codecs.keymapKey(rt.tableId(), bkBytes), Codecs.keymapValue(hash, disambig));
-        out.put(Codecs.hashregKey(rt.tableId(), hash, disambig), bkBytes);
-        return new EntityRef(hash, disambig, true);
+        if (misses.isEmpty()) return refs;
+
+        List<byte[]> probes = new ArrayList<>(misses.size());
+        for (int i : misses) probes.add(Codecs.hashregKey(rt.tableId(), hashes[i], 0));
+        List<byte[]> slot0 = storage.multiGet(probes);
+
+        Map<Long, java.util.Set<Integer>> claimedInBatch = new java.util.HashMap<>();
+        for (int mi = 0; mi < misses.size(); mi++) {
+            int i = misses.get(mi);
+            byte[] bkBytes = entities.get(i).getKey().bytes;
+            long hash = hashes[i];
+            java.util.Set<Integer> claimedNow = claimedInBatch.computeIfAbsent(hash, h -> new java.util.HashSet<>());
+            int disambig = 0;
+            byte[] claimed = claimedNow.contains(0) ? null : slot0.get(mi);
+            if (claimedNow.contains(0) || (claimed != null && !Arrays.equals(claimed, bkBytes))) {
+                // Rare path: batch-internal or stored hash collision — probe upward.
+                disambig = 1;
+                while (true) {
+                    if (!claimedNow.contains(disambig)) {
+                        byte[] c2 = storage.get(Codecs.hashregKey(rt.tableId(), hash, disambig));
+                        if (c2 == null || Arrays.equals(c2, bkBytes)) break;
+                    }
+                    disambig++;
+                    if (disambig > 0xFFFF) throw new ValidationException("hash collision chain exhausted (impossible)");
+                }
+            }
+            claimedNow.add(disambig);
+            out.put(Codecs.keymapKey(rt.tableId(), bkBytes), Codecs.keymapValue(hash, disambig));
+            out.put(Codecs.hashregKey(rt.tableId(), hash, disambig), bkBytes);
+            refs[i] = new EntityRef(hash, disambig, true);
+        }
+        return refs;
     }
 
     // ---- chain load / place / emit ---------------------------------------------------
@@ -305,21 +424,31 @@ public final class Scd2Applier {
         }
     }
 
-    /** Latest-knowledge chain, ascending validFrom. */
-    private List<WorkingVersion> loadChain(TableRuntime rt, EntityRef ref) {
+    /**
+     * Latest-knowledge chain, ascending validFrom — read lazily. The common CDC
+     * case (every pending validFrom strictly after the latest version) needs only
+     * the newest record; the full chain is decoded only for corrections, deletes
+     * at historical instants, and same-instant supersedes.
+     */
+    private List<WorkingVersion> loadChainLazy(TableRuntime rt, EntityRef ref, long minPendingVf,
+                                               StorageEngine.SeekIterator it) {
         List<WorkingVersion> chain = new ArrayList<>();
         byte[] prefix = Codecs.entityPrefix(rt.tableId(), ref.keyHash(), ref.disambig());
-        long lastVf = Long.MIN_VALUE;
-        boolean first = true;
-        try (CloseableKvIterator it = storage.prefixScan(prefix)) {
-            while (it.hasNext()) {
-                KV kv = it.next();
-                Codecs.DataKey k = Codecs.decodeDataKey(kv.key());
-                if (!first && k.validFrom() == lastVf) continue; // superseded belief
-                first = false;
-                lastVf = k.validFrom();
-                chain.add(WorkingVersion.fromStored(k, kv.value(), Codecs.decodeHeader(kv.value())));
-            }
+        KV kv = it.seekFirst(prefix);
+        if (kv == null || !io.chronodim.storage.util.Bytes.hasPrefix(kv.key(), prefix)) {
+            return chain; // keymap present but no data records (all-no-op history)
+        }
+        Codecs.DataKey k = Codecs.decodeDataKey(kv.key());
+        chain.add(WorkingVersion.fromStored(k, kv.value(), Codecs.decodeHeader(kv.value())));
+        if (minPendingVf > k.validFrom()) {
+            return chain; // append-only batch: the latest version is all placeRow needs
+        }
+        long lastVf = k.validFrom();
+        while ((kv = it.next()) != null && io.chronodim.storage.util.Bytes.hasPrefix(kv.key(), prefix)) {
+            k = Codecs.decodeDataKey(kv.key());
+            if (k.validFrom() == lastVf) continue; // superseded belief
+            lastVf = k.validFrom();
+            chain.add(WorkingVersion.fromStored(k, kv.value(), Codecs.decodeHeader(kv.value())));
         }
         java.util.Collections.reverse(chain); // scan order is validFrom DESC
         return chain;
