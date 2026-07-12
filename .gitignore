@@ -3,3 +3,11 @@ target/
 .idea/
 *.iml
 .vscode/
+
+# local demo/drill artifacts (quick start, runbook, scripts/ui-demo.sh)
+ui-demo-data/
+ui-demo-data-ui.log
+export/
+chronodim-data/
+dims/
+demo/
