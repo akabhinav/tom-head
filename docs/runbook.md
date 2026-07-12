@@ -217,6 +217,8 @@ ls export/customer                              # the published cold tier:
 > Shortcut: `scripts/ui-demo.sh` automates this whole section against a fresh
 > demo database — builds if needed, seeds data, starts the console, runs 12
 > API smoke checks, and leaves the UI running (`--ci` to tear down instead).
+> Windows: `powershell -ExecutionPolicy Bypass -File scripts\ui-demo.ps1`
+> (add `-CI` / `-Port 9000` / `-Data .\mydb`).
 
 ```bash
 java -jar $JAR ui -d $DATA

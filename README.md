@@ -251,6 +251,13 @@ scripts/ui-demo.sh                # ...then leaves the UI running for you
 scripts/ui-demo.sh --ci           # same, but tears down after — exit 0/1 for CI
 ```
 
+On Windows (PowerShell 5.1 or 7 — same behavior, same 12 checks):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\ui-demo.ps1
+powershell -ExecutionPolicy Bypass -File scripts\ui-demo.ps1 -CI -Port 9000
+```
+
 | Tab | What it does |
 |---|---|
 | **Data** | Browse current rows (or *as-of* any past date), substring filter, paging, optional system columns |
