@@ -58,7 +58,11 @@ public final class WalReader {
         return maxTxn;
     }
 
-    private static long scanSegment(Path seg, boolean lastSegment, boolean repairTail, Consumer<Record> consumer) {
+    /**
+     * Scans one segment. With {@code lastSegment=false} any truncation/corruption
+     * fails loudly (closed segments must be complete). Returns the highest txn seen.
+     */
+    public static long scanSegment(Path seg, boolean lastSegment, boolean repairTail, Consumer<Record> consumer) {
         String name = seg.getFileName().toString();
         long maxTxn = -1;
         try (FileChannel ch = FileChannel.open(seg, StandardOpenOption.READ)) {

@@ -85,6 +85,15 @@ public interface Engine extends AutoCloseable {
     /** Flushes and checkpoints storage; returns snapshot metadata (txn id, path). */
     Map<String, Object> snapshot();
 
+    /**
+     * Deletes local WAL segments that are no longer needed: every record already
+     * covered by the storage engine's durable watermark AND released by all
+     * attached plugins (publisher tail, object-store shipping). The active
+     * segment is never pruned. Shipped copies in the object store are untouched —
+     * the full audit log lives there. Run after {@link #snapshot()}.
+     */
+    Map<String, Object> pruneWal();
+
     /** Engine statistics for observability (R-OBS). */
     Map<String, Object> stats();
 

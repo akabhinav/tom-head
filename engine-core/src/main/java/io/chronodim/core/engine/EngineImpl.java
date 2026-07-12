@@ -508,6 +508,50 @@ public final class EngineImpl implements Engine {
     }
 
     @Override
+    public Map<String, Object> pruneWal() {
+        ensureOpen();
+        long durable = storage.durableTxn();
+        List<java.nio.file.Path> segments = WalReader.segments(walDir());
+
+        List<String> pruned = new ArrayList<>();
+        List<String> kept = new ArrayList<>();
+        for (int i = 0; i < segments.size(); i++) {
+            java.nio.file.Path seg = segments.get(i);
+            String name = seg.getFileName().toString();
+            if (i == segments.size() - 1) {
+                kept.add(name + " (active)");
+                continue;
+            }
+            // Closed segments only — the active one may be mid-append right now.
+            long maxTxn = WalReader.scanSegment(seg, false, false, rec -> {});
+            if (maxTxn > durable) {
+                kept.add(name + " (beyond durable watermark " + durable + ")");
+                continue;
+            }
+            boolean vetoed = false;
+            for (EnginePlugin p : plugins) {
+                if (!p.allowWalPrune(name, maxTxn)) {
+                    kept.add(name + " (held by " + p.getClass().getSimpleName() + ")");
+                    vetoed = true;
+                    break;
+                }
+            }
+            if (vetoed) continue;
+            try {
+                Files.deleteIfExists(seg);
+                pruned.add(name);
+            } catch (IOException e) {
+                throw new UncheckedIOException("cannot prune WAL segment " + seg, e);
+            }
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("durable_txn", durable);
+        out.put("pruned", pruned);
+        out.put("kept", kept);
+        return out;
+    }
+
+    @Override
     public Map<String, Object> stats() {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("applies", applies.get());

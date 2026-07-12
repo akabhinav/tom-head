@@ -13,6 +13,15 @@ public interface EnginePlugin extends AutoCloseable {
     /** A transaction became durable. Called outside engine locks; must not block long. */
     default void onCommit(long txnId) {}
 
+    /**
+     * WAL prune veto: may the segment (whose highest txn is {@code maxTxnInSegment})
+     * be deleted locally? The publisher vetoes segments it still needs to tail;
+     * the shipper vetoes segments not yet fully uploaded.
+     */
+    default boolean allowWalPrune(String segmentName, long maxTxnInSegment) {
+        return true;
+    }
+
     default java.util.Map<String, Object> stats() {
         return java.util.Map.of();
     }

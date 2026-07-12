@@ -17,9 +17,10 @@ public final class LocalFsObjectStore implements ObjectStore {
     private final Path root;
 
     public LocalFsObjectStore(Path root) {
-        this.root = root;
+        // Absolute + normalized so the escape check below works for relative roots too.
+        this.root = root.toAbsolutePath().normalize();
         try {
-            Files.createDirectories(root);
+            Files.createDirectories(this.root);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }

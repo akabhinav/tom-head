@@ -120,13 +120,19 @@ chronodim scan    -d ./dims -t customer --format csv -o current.csv
 
 # 5. operate
 chronodim verify   -d ./dims                       # state fingerprint + counts
-chronodim snapshot -d ./dims --object-store /mnt/backup
+chronodim snapshot -d ./dims --object-store /mnt/backup --prune-wal
 chronodim restore  --from /mnt/backup --target-dir ./dims-restored [--as-of-txn N]
 chronodim manifest show load-2026-07-11 -d ./dims  # immutable audit record of that load
 chronodim bench    -d ./bench-dir                  # standard benchmark on this box
 ```
 
 Every command accepts `--json` for machine-readable output.
+
+**Long-running deployments:** schedule `chronodim snapshot --object-store ... --prune-wal`
+(e.g. weekly). It checkpoints the hot store, uploads the snapshot, and deletes
+local WAL segments that are already durable, published, and fully shipped — the
+object store keeps the complete replayable audit log, so local disk stays
+bounded over years while restores remain snapshot + short-tail replay.
 
 ### Cross-table transactions
 

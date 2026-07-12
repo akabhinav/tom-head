@@ -119,6 +119,27 @@ public final class WalShipperPlugin implements EnginePlugin {
     }
 
     @Override
+    public synchronized boolean allowWalPrune(String segmentName, long maxTxnInSegment) {
+        // Only fully-shipped segments may leave the local disk: the object-store
+        // copy is the 10-year audit archive.
+        Path seg = engine.walDir().resolve(segmentName);
+        try {
+            long size = Files.exists(seg) ? Files.size(seg) : 0;
+            if (shippedBytes.getOrDefault(segmentName, 0L) >= size
+                    && (store.exists("wal/" + segmentName) || size == 0)) {
+                return true;
+            }
+            // One synchronous attempt so `snapshot --prune-wal` doesn't have to wait
+            // for the next shipping tick.
+            shipOnce();
+            return shippedBytes.getOrDefault(segmentName, 0L) >= Files.size(seg)
+                    && store.exists("wal/" + segmentName);
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    @Override
     public Map<String, Object> stats() {
         if (engine == null) return Map.of();
         Map<String, Object> m = new LinkedHashMap<>();

@@ -50,7 +50,7 @@ import java.util.concurrent.Callable;
                 Main.Init.class, Main.Table.class, Main.Load.class, Main.Apply.class,
                 Main.Get.class, Main.AsOf.class, Main.History.class, Main.Scan.class,
                 Main.ExportStatus.class, Main.FinalizeCmd.class,
-                Main.Snapshot.class, Main.Restore.class, Main.Verify.class,
+                Main.Snapshot.class, Main.WalPrune.class, Main.Restore.class, Main.Verify.class,
                 Main.Manifest.class, Main.Quarantine.class, Main.Stats.class, Main.Bench.class,
         })
 public final class Main {
@@ -458,6 +458,8 @@ public final class Main {
     static class Snapshot implements Callable<Integer> {
         @CommandLine.Mixin
         EngineOpts opts;
+        @Option(names = "--prune-wal", description = "After the checkpoint, delete local WAL segments that are durable, published and shipped")
+        boolean pruneWal;
 
         @Override
         public Integer call() {
@@ -471,7 +473,25 @@ public final class Main {
                     snap.put("uploaded", up.get("key"));
                     snap.put("zip_bytes", up.get("zip_bytes"));
                 }
+                if (pruneWal) {
+                    snap = new LinkedHashMap<>(snap);
+                    snap.put("wal_prune", e.pruneWal());
+                }
                 opts.out(snap);
+            }
+            return 0;
+        }
+    }
+
+    @Command(name = "wal-prune", description = "Delete local WAL segments no longer needed (durable + published + shipped). Shipped copies in the object store are untouched.")
+    static class WalPrune implements Callable<Integer> {
+        @CommandLine.Mixin
+        EngineOpts opts;
+
+        @Override
+        public Integer call() {
+            try (Engine e = opts.open()) {
+                opts.out(e.pruneWal());
             }
             return 0;
         }

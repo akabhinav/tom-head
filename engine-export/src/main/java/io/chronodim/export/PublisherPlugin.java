@@ -320,6 +320,18 @@ public final class PublisherPlugin implements EnginePlugin {
     }
 
     @Override
+    public boolean allowWalPrune(String segmentName, long maxTxnInSegment) {
+        // The publisher tails the WAL: a segment may only vanish once every
+        // published table's watermark has passed its highest transaction.
+        synchronized (this) {
+            for (TableTarget t : targets.values()) {
+                if (t.publishedTxn < maxTxnInSegment) return false;
+            }
+        }
+        return true;
+    }
+
+    @Override
     public Map<String, Object> stats() {
         if (engine == null || targets.isEmpty()) return Map.of();
         long minWatermark = Long.MAX_VALUE;

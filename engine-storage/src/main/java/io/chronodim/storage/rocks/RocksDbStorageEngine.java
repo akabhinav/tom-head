@@ -95,6 +95,9 @@ public final class RocksDbStorageEngine implements StorageEngine {
         } catch (RocksDBException e) {
             throw new ChronoDimException("cannot open RocksDB at " + dir, e);
         }
+        // Seed from the persisted watermark so a session that never writes can
+        // never regress it on flush/close.
+        this.lastWrittenTxn = durableTxn();
     }
 
     @Override

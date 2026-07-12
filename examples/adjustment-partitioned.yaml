@@ -1,0 +1,26 @@
+# Regulatory adjustment table, partitioned for Spark/Databricks pruning.
+# Published layout: export/adjustment/data/region=EU/book_year=2026/part-*.jsonl
+table: adjustment_p
+business_key: [adj_id]
+on_row_error: fail_batch
+schema:
+  - {name: adj_id,      type: string}
+  - {name: customer_id, type: string}
+  - {name: region,      type: string}
+  - {name: book_year,   type: int}
+  - {name: amount,      type: "decimal(18,2)"}
+  - {name: tags,        type: "array<string>"}
+  - {name: detail,      type: "struct<desk:string,book:string>"}
+  - {name: effective,   type: timestamp}
+valid_time:
+  mode: source_column
+  column: effective
+late_arrival:
+  policy: split
+quality_gates:
+  - {column: amount,      rule: not_null}
+  - {column: region,      rule: "in (EU, US, APAC)"}
+publish:
+  enabled: true
+  location: ./export/adjustment
+  partition_by: [region, book_year]
