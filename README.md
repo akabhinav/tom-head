@@ -68,6 +68,10 @@ Requires JDK 21+ (production target JDK 25; pass `-Djava.release=25` on a 25 too
 
 ## Quick start
 
+> Prefer a guided drill? [`docs/runbook.md`](docs/runbook.md) walks build →
+> load → adjust → time-travel → UI verification end to end, with the expected
+> output of every command.
+
 ```bash
 alias chronodim='java -jar engine-cli/target/chronodim.jar'
 
