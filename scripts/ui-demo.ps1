@@ -11,7 +11,14 @@
 param(
     [switch]$CI,
     [int]$Port = 8420,
-    [string]$Data = ".\ui-demo-data"
+    [string]$Data = ".\ui-demo-data",
+    # rocksdb (default) needs the MSVC runtime for its native library; if that
+    # is missing on this machine, java crashes with an unhelpful native exit
+    # code (commonly -1073740791 / 0xC0000409) before ChronoDim's own error
+    # handling runs. -Storage lsm uses the pure-Java backend instead - zero
+    # native dependencies, same correctness guarantees, same test suite.
+    [ValidateSet("rocksdb", "lsm")]
+    [string]$Storage = "rocksdb"
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,13 +62,22 @@ if (-not (Test-Path $Jar)) {
 }
 Write-Host "  using $Jar"
 
-Say "2/5 seed demo data in $Data"
+Say "2/5 seed demo data in $Data (storage: $Storage)"
 function Run-Chronodim {
     # Local EAP: under 'Stop', PS 5.1 turns redirected native stderr into a
     # terminating error even when the command succeeds (java notes, warnings).
     $ErrorActionPreference = "Continue"
-    & java -jar $Jar @args 2>$null
-    if ($LASTEXITCODE -ne 0) { throw "chronodim $($args -join ' ') failed (exit $LASTEXITCODE)" }
+    $stderr = & java -jar $Jar @args --storage $Storage 2>&1 1>$null
+    $exit = $LASTEXITCODE
+    if ($exit -ne 0) {
+        if ($stderr) { Write-Host ($stderr | Out-String) -ForegroundColor Yellow }
+        if ($exit -lt 0 -and $Storage -eq "rocksdb") {
+            Write-Host ("  native crash (exit $exit) — this is usually RocksDB's native library " +
+                        "failing to load, often a missing Microsoft Visual C++ Redistributable (x64). " +
+                        "Try:  -Storage lsm   (pure-Java backend, no native dependency)") -ForegroundColor Yellow
+        }
+        throw "chronodim $($args -join ' ') --storage $Storage failed (exit $exit)"
+    }
 }
 if (-not (Test-Path $Data)) {
     Run-Chronodim table create -f examples\customer.yaml -d $Data | Out-Null
@@ -75,7 +91,8 @@ if (-not (Test-Path $Data)) {
 Say "3/5 start UI on port $Port"
 $OutLog = "$Data-ui.log"
 $ErrLog = "$Data-ui.err.log"
-$Ui = Start-Process -FilePath "java" -ArgumentList "-jar", $Jar, "ui", "-d", $Data, "--port", "$Port" `
+$Ui = Start-Process -FilePath "java" `
+        -ArgumentList "-jar", $Jar, "ui", "-d", $Data, "--port", "$Port", "--storage", $Storage `
         -RedirectStandardOutput $OutLog -RedirectStandardError $ErrLog -NoNewWindow -PassThru
 
 function Stop-Ui {
@@ -92,8 +109,13 @@ for ($i = 0; $i -lt 50; $i++) {
         $ready = $true; break
     } catch {
         if ($Ui.HasExited) {
-            Write-Host "UI process died - $OutLog / $ErrLog :" -ForegroundColor Red
+            Write-Host "UI process died (exit $($Ui.ExitCode)) - $OutLog / $ErrLog :" -ForegroundColor Red
             Get-Content $OutLog, $ErrLog -ErrorAction SilentlyContinue | Select-Object -Last 5
+            if ($Ui.ExitCode -lt 0 -and $Storage -eq "rocksdb") {
+                Write-Host ("  native crash — usually RocksDB's native library failing to load " +
+                            "(often a missing Microsoft Visual C++ Redistributable x64). " +
+                            "Retry with:  -Storage lsm") -ForegroundColor Yellow
+            }
             exit 1
         }
         Start-Sleep -Milliseconds 200

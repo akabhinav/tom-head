@@ -5,6 +5,7 @@
 #   scripts/ui-demo.sh --ci           # same, but stop the UI afterwards (exit 0/1) — for CI
 #   scripts/ui-demo.sh --port 9000    # custom port          (default 8420)
 #   scripts/ui-demo.sh --data ./mydb  # custom data dir      (default ./ui-demo-data, reused if present)
+#   scripts/ui-demo.sh --storage lsm  # pure-Java backend, no native library (default: rocksdb)
 #
 # Requires: java 21+, curl. maven only if the jar isn't built yet.
 
@@ -14,11 +15,13 @@ cd "$(dirname "$0")/.."
 PORT=8420
 DATA=./ui-demo-data
 CI=0
+STORAGE=rocksdb
 while [ $# -gt 0 ]; do
   case "$1" in
     --ci) CI=1 ;;
     --port) PORT=$2; shift ;;
     --data) DATA=$2; shift ;;
+    --storage) STORAGE=$2; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -46,8 +49,20 @@ if [ ! -f "$JAR" ]; then
 fi
 echo "  using $JAR"
 
-say "2/5 seed demo data in $DATA"
-run() { java -jar "$JAR" "$@" 2>/dev/null; }
+say "2/5 seed demo data in $DATA (storage: $STORAGE)"
+run() {
+  local err
+  if err=$(java -jar "$JAR" "$@" --storage "$STORAGE" 2>&1 >/dev/null); then
+    return 0
+  fi
+  local code=$?
+  [ -n "$err" ] && printf '%s\n' "$err" >&2
+  if [ "$STORAGE" = rocksdb ] && [ "$code" -gt 128 ]; then
+    echo "  native crash (exit $code) — usually RocksDB's native library failing to load." >&2
+    echo "  Try:  --storage lsm   (pure-Java backend, no native dependency)" >&2
+  fi
+  return "$code"
+}
 if [ ! -d "$DATA" ]; then
   run table create -f examples/customer.yaml -d "$DATA" >/dev/null
   run apply examples/changes.json -d "$DATA" -t customer --load-id demo-day1 --json >/dev/null
@@ -58,7 +73,7 @@ else
 fi
 
 say "3/5 start UI on port $PORT"
-java -jar "$JAR" ui -d "$DATA" --port "$PORT" >"$DATA-ui.log" 2>&1 &
+java -jar "$JAR" ui -d "$DATA" --port "$PORT" --storage "$STORAGE" >"$DATA-ui.log" 2>&1 &
 UI_PID=$!
 cleanup() { kill "$UI_PID" 2>/dev/null || true; wait "$UI_PID" 2>/dev/null || true; }
 if [ "$CI" = 1 ]; then trap cleanup EXIT; fi

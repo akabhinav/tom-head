@@ -249,14 +249,26 @@ idempotent duplicate loads, gate rejections, audit trail, fingerprint):
 ```bash
 scripts/ui-demo.sh                # ...then leaves the UI running for you
 scripts/ui-demo.sh --ci           # same, but tears down after — exit 0/1 for CI
+scripts/ui-demo.sh --storage lsm  # pure-Java backend — use this if rocksdb ever
+                                   # fails with a native crash (see below)
 ```
 
-On Windows (PowerShell 5.1 or 7 — same behavior, same 12 checks):
+On Windows (PowerShell 5.1 or 7 — same behavior, same 12 checks). Scripts are
+not signed, so either bypass the policy for the call or for the session:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\ui-demo.ps1
 powershell -ExecutionPolicy Bypass -File scripts\ui-demo.ps1 -CI -Port 9000
+# or, once per shell session: Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```
+
+**RocksDB is the default storage backend and loads a native library; on some
+Windows machines (usually missing the Microsoft Visual C++ Redistributable
+x64) that native load crashes java with an unhelpful exit code before
+ChronoDim's own error handling runs.** Both scripts print a hint and the
+fix when that happens; the durable fix is `-Storage lsm` /
+`--storage lsm` — ChronoDim's pure-Java backend, zero native dependencies,
+same correctness guarantees and test coverage as RocksDB.
 
 | Tab | What it does |
 |---|---|
