@@ -17,7 +17,8 @@ public record AuditManifest(
         boolean alreadyApplied,
         boolean backfill,
         List<TableStats> tables,
-        List<RowError> errors) {
+        List<RowError> errors,
+        java.util.Map<String, Object> metadata) {
 
     /** Per-table outcome counters. */
     public record TableStats(
@@ -39,5 +40,7 @@ public record AuditManifest(
     public AuditManifest {
         tables = List.copyOf(tables);
         errors = List.copyOf(errors);
+        metadata = metadata == null ? java.util.Map.of()
+                : java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(metadata));
     }
 }

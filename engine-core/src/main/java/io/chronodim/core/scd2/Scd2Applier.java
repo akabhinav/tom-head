@@ -68,6 +68,11 @@ public final class Scd2Applier {
      */
     public Counters applyTable(TableRuntime rt, List<InputRow> rows, long txTime, long txnId,
                                AtomicBatch out, ErrorSink errors, QuarantineSink quarantine) {
+        return applyTable(rt, rows, txTime, txnId, out, errors, quarantine, false);
+    }
+
+    public Counters applyTable(TableRuntime rt, List<InputRow> rows, long txTime, long txnId,
+                               AtomicBatch out, ErrorSink errors, QuarantineSink quarantine, boolean fullSnapshot) {
         TableConfig cfg = rt.config();
         TableSchema schema = cfg.currentSchema();
         List<Column> bkCols = rt.businessKeyColumns();
@@ -76,12 +81,16 @@ public final class Scd2Applier {
 
         // Phase 1: coerce + validate + group by business key (preserving input order).
         Map<BytesKey, List<PendingRow>> groups = new LinkedHashMap<>();
+        java.util.Set<BytesKey> seenKeys = new java.util.HashSet<>();
         long rowIndex = -1;
         for (InputRow in : rows) {
             rowIndex++;
             c.rowsIn++;
             try {
                 PendingRow pr = coerce(cfg, schema, bkCols, tracked, in, txTime);
+                // Snapshot semantics: a key present in the file — even with a failing
+                // row — must never be deleted-by-absence.
+                seenKeys.add(new BytesKey(pr.bkBytes));
                 String gateFailure = gateFailure(cfg, pr.values);
                 if (gateFailure != null) {
                     handleRowFailure(cfg, rt, in, c, errors, quarantine, rowIndex, gateFailure);
@@ -90,6 +99,12 @@ public final class Scd2Applier {
                 groups.computeIfAbsent(new BytesKey(pr.bkBytes), k -> new ArrayList<>()).add(pr);
             } catch (ValidationException e) {
                 handleRowFailure(cfg, rt, in, c, errors, quarantine, rowIndex, e.getMessage());
+            }
+        }
+        if (fullSnapshot) {
+            for (byte[] bk : missingActiveKeys(rt, seenKeys)) {
+                groups.computeIfAbsent(new BytesKey(bk), k -> new ArrayList<>())
+                        .add(new PendingRow(new LinkedHashMap<>(), new LinkedHashMap<>(), true, txTime, bk, 0));
             }
         }
 
@@ -155,7 +170,9 @@ public final class Scd2Applier {
             bkValues[i] = v;
         }
         long validFrom;
-        if (cfg.validTimeMode() == TableConfig.ValidTimeMode.SOURCE_COLUMN) {
+        if (in.validFromMicrosOverride() != null) {
+            validFrom = in.validFromMicrosOverride(); // envelope effective_at / SCD2 import wins
+        } else if (cfg.validTimeMode() == TableConfig.ValidTimeMode.SOURCE_COLUMN) {
             Object v = values.get(cfg.validTimeColumn());
             if (v == null) throw new ValidationException("valid_time column '" + cfg.validTimeColumn() + "' is null");
             Column vc = schema.column(cfg.validTimeColumn());
@@ -205,6 +222,30 @@ public final class Scd2Applier {
             }
         }
         return out;
+    }
+
+    /** Active entities of the table whose business key is absent from the batch (snapshot mode). */
+    private List<byte[]> missingActiveKeys(TableRuntime rt, java.util.Set<BytesKey> seenKeys) {
+        List<byte[]> missing = new ArrayList<>();
+        long curHash = 0;
+        int curDis = -1;
+        boolean any = false;
+        try (io.chronodim.storage.CloseableKvIterator it =
+                     storage.prefixScan(Codecs.tableDataPrefix(rt.tableId()))) {
+            while (it.hasNext()) {
+                io.chronodim.storage.KV kv = it.next();
+                Codecs.DataKey k = Codecs.decodeDataKey(kv.key());
+                boolean newEntity = !any || k.keyHash() != curHash || k.disambig() != curDis;
+                if (!newEntity) continue;
+                any = true;
+                curHash = k.keyHash();
+                curDis = k.disambig();
+                Codecs.DecodedValue h = Codecs.decodeHeader(kv.value());
+                if (h.op() == Op.DELETE.code || h.validTo() != Version.OPEN) continue; // not active
+                if (!seenKeys.contains(new BytesKey(h.bkBytes()))) missing.add(h.bkBytes());
+            }
+        }
+        return missing;
     }
 
     // ---- entity identity ----------------------------------------------------------

@@ -111,7 +111,19 @@ public final class TableConfigIO {
             boolean enabled = Boolean.TRUE.equals(pub.get("enabled"));
             String location = pub.get("location") == null ? null : String.valueOf(pub.get("location"));
             List<String> partitionBy = pub.get("partition_by") == null ? List.of() : strList(pub.get("partition_by"), "publish.partition_by");
-            publish = new TableConfig.PublishConfig(enabled, location, partitionBy);
+            TableConfig.PublishColumnStyle style = pub.get("column_style") == null
+                    ? TableConfig.PublishColumnStyle.CHRONODIM
+                    : enumOf(TableConfig.PublishColumnStyle.class, pub.get("column_style"), "publish.column_style");
+            String startCol = null;
+            String endCol = null;
+            Boolean includeOps = null;
+            Map<String, Object> scd2 = subMap(pub.get("scd2_columns"));
+            if (scd2 != null) {
+                startCol = scd2.get("start") == null ? null : String.valueOf(scd2.get("start"));
+                endCol = scd2.get("end") == null ? null : String.valueOf(scd2.get("end"));
+                if (scd2.get("include_ops") != null) includeOps = Boolean.valueOf(String.valueOf(scd2.get("include_ops")));
+            }
+            publish = new TableConfig.PublishConfig(enabled, location, partitionBy, style, startCol, endCol, includeOps);
         }
 
         return new TableConfig(table, businessKey, history,
@@ -163,6 +175,16 @@ public final class TableConfigIO {
         pub.put("enabled", c.publish().enabled());
         pub.put("location", c.publish().location());
         pub.put("partition_by", c.publish().partitionBy());
+        pub.put("column_style", c.publish().columnStyle().name());
+        if (c.publish().startColumn() != null) {
+            Map<String, Object> scd2 = new LinkedHashMap<>();
+            scd2.put("start", c.publish().startColumn());
+            scd2.put("end", c.publish().endColumn());
+            if (c.publish().includeOps() != null) scd2.put("include_ops", c.publish().includeOps());
+            pub.put("scd2_columns", scd2);
+        } else if (c.publish().includeOps() != null) {
+            pub.put("scd2_columns", Map.of("include_ops", c.publish().includeOps()));
+        }
         m.put("publish", pub);
         return Json.write(m);
     }
@@ -192,12 +214,21 @@ public final class TableConfigIO {
             gates.add(new QualityGate((String) gm.get("column"), (String) gm.get("rule")));
         }
         Map<String, Object> pub = (Map<String, Object>) m.get("publish");
-        TableConfig.PublishConfig publish = pub == null
-                ? TableConfig.PublishConfig.disabled()
-                : new TableConfig.PublishConfig(
-                        Boolean.TRUE.equals(pub.get("enabled")),
-                        (String) pub.get("location"),
-                        pub.get("partition_by") == null ? List.of() : (List<String>) (List<?>) pub.get("partition_by"));
+        TableConfig.PublishConfig publish;
+        if (pub == null) {
+            publish = TableConfig.PublishConfig.disabled();
+        } else {
+            Map<String, Object> scd2 = (Map<String, Object>) pub.get("scd2_columns");
+            publish = new TableConfig.PublishConfig(
+                    Boolean.TRUE.equals(pub.get("enabled")),
+                    (String) pub.get("location"),
+                    pub.get("partition_by") == null ? List.of() : (List<String>) (List<?>) pub.get("partition_by"),
+                    pub.get("column_style") == null ? TableConfig.PublishColumnStyle.CHRONODIM
+                            : TableConfig.PublishColumnStyle.valueOf((String) pub.get("column_style")),
+                    scd2 == null ? null : (String) scd2.get("start"),
+                    scd2 == null ? null : (String) scd2.get("end"),
+                    scd2 == null || scd2.get("include_ops") == null ? null : (Boolean) scd2.get("include_ops"));
+        }
         TableConfig cfg = new TableConfig(table, businessKey, history,
                 (List<String>) (List<?>) m.getOrDefault("tracked_columns", List.of()),
                 (List<String>) (List<?>) m.getOrDefault("ignored_columns", List.of()),

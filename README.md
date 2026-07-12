@@ -134,6 +134,66 @@ local WAL segments that are already durable, published, and fully shipped — th
 object store keeps the complete replayable audit log, so local disk stays
 bounded over years while restores remain snapshot + short-tail replay.
 
+### The adjustment envelope — metadata + records in one JSON file
+
+Teams that send "a few metadata columns and an array of records" use the
+envelope form. No operation names, no CLI flags — the file is self-describing:
+
+```json
+{
+  "table": "customer",
+  "load_id": "adj-2026-Q2-0417",
+  "effective_at": "2026-06-30T00:00:00Z",
+  "source": "finance-ops",
+  "approved_by": "jsmith",
+  "reason": "quarterly regulatory true-up",
+  "defaults": { "segment": "RETAIL" },
+  "records": [
+    { "customer_id": "C1", "risk_score": 120.5 },
+    { "customer_id": "C2", "risk_score": 250.0 }
+  ]
+}
+```
+
+```bash
+chronodim apply adjustments.json -d ./dims       # table + load_id come from the file
+```
+
+- `load_id` → idempotency key (re-sending the file is a no-op)
+- `effective_at` → valid time (`__START_AT`) for records without their own
+- `defaults` → merged into every record (record wins)
+- `metadata` **and any unrecognised top-level keys** (approver, reason, source —
+  whatever the team's template says) → stored in the audit manifest forever
+- `records` → plain upserts; the engine derives insert/new-version/no-op itself
+
+Related feed styles with no operation column:
+
+```bash
+# full snapshot: keys absent from the file are soft-deleted (delete-by-absence)
+chronodim apply snapshot.json -d ./dims -t customer --load-id snap-07-12 --full-snapshot
+
+# rows that ALREADY carry SCD2 intervals (__START_AT/__END_AT, END null = active):
+# auto-detected and imported — history reproduced, closed tails become deletes
+chronodim load scd2_export.jsonl -d ./dims -t customer --load-id migrate-1
+chronodim apply delta.jsonl -d ./dims -t customer --load-id d1 \
+          --scd2-start-column EFF_START_DT --scd2-end-column EFF_END_DT   # any team template
+```
+
+### Publishing in your team's SCD2 template
+
+The published column names are per-table configuration — Databricks convention
+or any custom template:
+
+```yaml
+publish:
+  enabled: true
+  location: ./export/customer
+  column_style: databricks        # → __START_AT / __END_AT, END null = active,
+                                  #   no _op column, deletes = closed final version
+  # or any custom convention:
+  # scd2_columns: {start: EFF_START_DT, end: EFF_END_DT, include_ops: false}
+```
+
 ### Cross-table transactions
 
 A JSON file with an object of table → rows applies atomically as one engine

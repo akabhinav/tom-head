@@ -48,6 +48,11 @@ public final class ReferenceScd2 {
 
     /** Applies one batch; returns per-batch counters {inserts,updates,noops,deletes,lateSplits,rejects,quarantined}. */
     public Map<String, Long> applyBatch(List<InputRow> rows, long loadTimeMicros) {
+        return applyBatch(rows, loadTimeMicros, false);
+    }
+
+    /** With {@code fullSnapshot}: active keys absent from the batch are soft-deleted at load time. */
+    public Map<String, Long> applyBatch(List<InputRow> rows, long loadTimeMicros, boolean fullSnapshot) {
         int belief = batches++;
         Map<String, Long> counters = new LinkedHashMap<>();
         for (String k : List.of("inserts", "updates", "no_ops", "deletes", "late_splits", "rejects", "quarantined")) {
@@ -55,6 +60,7 @@ public final class ReferenceScd2 {
         }
         // coerce + gate + group (mirrors the public contract, not the engine internals)
         Map<String, List<Pending>> groups = new LinkedHashMap<>();
+        java.util.Set<String> seenKeys = new java.util.HashSet<>();
         for (InputRow in : rows) {
             Pending p;
             try {
@@ -63,12 +69,20 @@ public final class ReferenceScd2 {
                 bump(counters, failureCounter());
                 continue;
             }
+            seenKeys.add(p.key);
             String gate = gateFail(p.row);
             if (gate != null) {
                 bump(counters, failureCounter());
                 continue;
             }
             groups.computeIfAbsent(p.key, k -> new ArrayList<>()).add(p);
+        }
+        if (fullSnapshot) {
+            for (String key : new ArrayList<>(chains.keySet())) {
+                if (seenKeys.contains(key) || current(key) == null) continue;
+                groups.computeIfAbsent(key, k -> new ArrayList<>())
+                        .add(new Pending(key, loadTimeMicros, true, new LinkedHashMap<>()));
+            }
         }
 
         for (Map.Entry<String, List<Pending>> g : groups.entrySet()) {
@@ -286,7 +300,9 @@ public final class ReferenceScd2 {
             if (row.get(k) == null) throw new ValidationException("null business key");
         }
         long vf;
-        if (cfg.validTimeMode() == TableConfig.ValidTimeMode.SOURCE_COLUMN) {
+        if (in.validFromMicrosOverride() != null) {
+            vf = in.validFromMicrosOverride();
+        } else if (cfg.validTimeMode() == TableConfig.ValidTimeMode.SOURCE_COLUMN) {
             Object v = row.get(cfg.validTimeColumn());
             if (v == null) throw new ValidationException("null valid time");
             Column vc = schema.column(cfg.validTimeColumn());

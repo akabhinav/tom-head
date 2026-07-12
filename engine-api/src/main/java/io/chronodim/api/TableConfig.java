@@ -29,14 +29,65 @@ public record TableConfig(
     /** What to do with rows failing coercion/quality gates (R-APPLY-6). */
     public enum BatchFailurePolicy { FAIL_BATCH, SKIP_ROWS, QUARANTINE }
 
-    public record PublishConfig(boolean enabled, String location, List<String> partitionBy) {
+    /** Shape of the published system columns. */
+    public enum PublishColumnStyle {
+        /** _valid_from/_valid_to/_tx_time/_txn_id/_op/_schema_version (full bitemporal log). */
+        CHRONODIM,
+        /**
+         * Databricks convention: __START_AT/__END_AT, END null = active row, no
+         * operation column; deletes appear as a closed final version with no
+         * successor (tombstone rows are not published).
+         */
+        DATABRICKS
+    }
+
+    /**
+     * Publish shape. {@code columnStyle} picks a preset; {@code startColumn}/
+     * {@code endColumn}/{@code includeOps} override it — every team's SCD2 column
+     * convention (__START_AT/__END_AT, EFF_START_DT/EFF_END_DT, ...) is expressible.
+     */
+    public record PublishConfig(boolean enabled, String location, List<String> partitionBy,
+                                PublishColumnStyle columnStyle,
+                                String startColumn, String endColumn, Boolean includeOps) {
         public PublishConfig {
             partitionBy = partitionBy == null ? List.of() : List.copyOf(partitionBy);
+            if (columnStyle == null) columnStyle = PublishColumnStyle.CHRONODIM;
             if (enabled && (location == null || location.isBlank())) {
                 throw new ConfigException("publish.enabled requires publish.location");
             }
+            if ((startColumn == null) != (endColumn == null)) {
+                throw new ConfigException("publish.scd2_columns: start and end must be set together");
+            }
+            if (startColumn != null && startColumn.equals(endColumn)) {
+                throw new ConfigException("publish.scd2_columns: start and end must differ");
+            }
         }
+
+        public PublishConfig(boolean enabled, String location, List<String> partitionBy, PublishColumnStyle columnStyle) {
+            this(enabled, location, partitionBy, columnStyle, null, null, null);
+        }
+
+        public PublishConfig(boolean enabled, String location, List<String> partitionBy) {
+            this(enabled, location, partitionBy, PublishColumnStyle.CHRONODIM, null, null, null);
+        }
+
         public static PublishConfig disabled() { return new PublishConfig(false, null, List.of()); }
+
+        /** Effective SCD2 start-column name after preset + overrides. */
+        public String effectiveStartColumn() {
+            if (startColumn != null) return startColumn;
+            return columnStyle == PublishColumnStyle.DATABRICKS ? "__START_AT" : "_valid_from";
+        }
+
+        public String effectiveEndColumn() {
+            if (endColumn != null) return endColumn;
+            return columnStyle == PublishColumnStyle.DATABRICKS ? "__END_AT" : "_valid_to";
+        }
+
+        public boolean effectiveIncludeOps() {
+            if (includeOps != null) return includeOps;
+            return columnStyle != PublishColumnStyle.DATABRICKS;
+        }
     }
 
     public TableConfig {
@@ -85,6 +136,14 @@ public record TableConfig(
             ColumnType vk = vc.kind();
             if (vk != ColumnType.TIMESTAMP && vk != ColumnType.TIMESTAMP_NTZ && vk != ColumnType.DATE) {
                 throw new ConfigException("table '" + table + "': valid_time.column must be timestamp, timestamp_ntz or date");
+            }
+        }
+        if (publish.enabled()) {
+            for (String sys : List.of(publish.effectiveStartColumn(), publish.effectiveEndColumn())) {
+                if (current.column(sys) != null) {
+                    throw new ConfigException("table '" + table + "': publish SCD2 column '" + sys
+                            + "' collides with a schema column — pick a different name");
+                }
             }
         }
         for (String pc : publish.partitionBy()) {

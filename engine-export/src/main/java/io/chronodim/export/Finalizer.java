@@ -32,10 +32,15 @@ public final class Finalizer {
     private Finalizer() {}
 
     public static Map<String, Object> run(Path location, List<String> businessKey) {
-        return run(location, businessKey, List.of());
+        return run(location, businessKey, List.of(), PublishedContract.Style.CHRONODIM);
     }
 
     public static Map<String, Object> run(Path location, List<String> businessKey, List<String> partitionBy) {
+        return run(location, businessKey, partitionBy, PublishedContract.Style.CHRONODIM);
+    }
+
+    public static Map<String, Object> run(Path location, List<String> businessKey, List<String> partitionBy,
+                                          PublishedContract.Style style) {
         try {
             Path logDir = location.resolve(PublishedContract.LOG_DIR);
             Path dataDir = location.resolve(PublishedContract.DATA_DIR);
@@ -80,7 +85,7 @@ public final class Finalizer {
             // Latest belief per (business key, _valid_from).
             Map<String, Map<String, Object>> latest = new LinkedHashMap<>();
             for (Map<String, Object> r : allRows) {
-                String k = groupKey(r, businessKey) + "" + r.get(PublishedContract.VALID_FROM);
+                String k = groupKey(r, businessKey) + "" + r.get(style.startCol());
                 Map<String, Object> prev = latest.get(k);
                 if (prev == null || compareTx(r, prev) > 0) latest.put(k, r);
             }
@@ -92,16 +97,17 @@ public final class Finalizer {
             }
             List<Map<String, Object>> current = new ArrayList<>();
             for (List<Map<String, Object>> chain : byEntity.values()) {
-                chain.sort(Comparator.comparing(r -> String.valueOf(r.get(PublishedContract.VALID_FROM))));
+                chain.sort(Comparator.comparing(r -> String.valueOf(r.get(style.startCol()))));
                 for (int i = 0; i < chain.size(); i++) {
                     Map<String, Object> r = new LinkedHashMap<>(chain.get(i));
-                    Object vt = r.get(PublishedContract.VALID_TO);
+                    Object vt = r.get(style.endCol());
                     if (vt == null && i + 1 < chain.size()) {
-                        vt = chain.get(i + 1).get(PublishedContract.VALID_FROM);
-                        r.put(PublishedContract.VALID_TO, vt);
+                        vt = chain.get(i + 1).get(style.startCol());
+                        r.put(style.endCol(), vt);
                     }
-                    boolean isCurrent = vt == null && !"DELETE".equals(r.get(PublishedContract.OP));
-                    r.put("_is_current", isCurrent);
+                    boolean isCurrent = vt == null
+                            && (!style.includeOps() || !"DELETE".equals(r.get(PublishedContract.OP)));
+                    if (style.includeOps()) r.put("_is_current", isCurrent);
                     if (isCurrent) current.add(r);
                 }
             }
@@ -110,7 +116,7 @@ public final class Finalizer {
             // preserving the table's Hive-style partition layout.
             allRows.sort(Comparator
                     .comparing((Map<String, Object> r) -> groupKey(r, businessKey))
-                    .thenComparing(r -> String.valueOf(r.get(PublishedContract.VALID_FROM)))
+                    .thenComparing(r -> String.valueOf(r.get(style.startCol())))
                     .thenComparing(r -> String.valueOf(r.get(PublishedContract.TX_TIME))));
             List<Map<String, Object>> fileEntries = new ArrayList<>();
             String logBase = "log-" + String.format("%020d", nextSeq) + ".jsonl";
@@ -150,7 +156,7 @@ public final class Finalizer {
                         "t",
                         "read_json_auto(['" + location.toAbsolutePath() + "/finalized/**/log-*.jsonl', '"
                                 + location.toAbsolutePath() + "/data/**/*.jsonl'])",
-                        businessKey));
+                        businessKey, style));
             }
 
             Map<String, Object> out = new LinkedHashMap<>();

@@ -201,10 +201,11 @@ public final class EngineImpl implements Engine {
 
     @Override
     public AuditManifest apply(ApplyBatch req) {
-        return applyInternal(req.loadId(), req.tables(), b -> {});
+        return applyInternal(req.loadId(), req.tables(), req.metadata(), b -> {});
     }
 
     private AuditManifest applyInternal(String loadId, List<ApplyBatch.TableBatch> tableBatches,
+                                        Map<String, Object> metadata,
                                         java.util.function.Consumer<AtomicBatch> extraMutations) {
         ensureOpen();
         long startNanos = System.nanoTime();
@@ -224,7 +225,7 @@ public final class EngineImpl implements Engine {
 
             for (ApplyBatch.TableBatch tb : tableBatches) {
                 TableRuntime rt = catalog.get(tb.table());
-                Scd2Applier.Counters c = applier.applyTable(rt, tb.rows(), txTime, txn, batch, errors, quar);
+                Scd2Applier.Counters c = applier.applyTable(rt, tb.rows(), txTime, txn, batch, errors, quar, tb.fullSnapshot());
                 stats.add(c.toStats(rt.config().table(), rt.configHash(), rt.config().currentSchema().schemaVersion()));
                 rowsIn.addAndGet(c.rowsIn);
             }
@@ -235,7 +236,7 @@ public final class EngineImpl implements Engine {
             ManifestHolder holder = new ManifestHolder();
             app = wal.append(Wal.TXN_COMMIT, txn, (segment, offset) -> {
                 AuditManifest m = new AuditManifest(loadId, txn, txTime, wallMillis, segment, offset, 0,
-                        false, false, stats, errors.list);
+                        false, false, stats, errors.list, metadata);
                 String json = ManifestCodec.toJson(m);
                 batch.put(Codecs.manifestKey(txn), json.getBytes(StandardCharsets.UTF_8));
                 batch.put(Codecs.loadIdKey(loadId), ByteBuffer.allocate(8).putLong(txn).array());
@@ -299,7 +300,7 @@ public final class EngineImpl implements Engine {
             ManifestHolder holder = new ManifestHolder();
             app = wal.append(Wal.TXN_COMMIT, txnB, (segment, offset) -> {
                 AuditManifest m = new AuditManifest(loadId, txnB, txTime, wallMillis, segment, offset, 0,
-                        false, true, stats, errors.list);
+                        false, true, stats, errors.list, Map.of());
                 String json = ManifestCodec.toJson(m);
                 batch.put(Codecs.manifestKey(txnB), json.getBytes(StandardCharsets.UTF_8));
                 batch.put(Codecs.loadIdKey(loadId), ByteBuffer.allocate(8).putLong(txnB).array());
@@ -424,7 +425,7 @@ public final class EngineImpl implements Engine {
             }
         }
         if (rows.isEmpty()) throw new ValidationException("no quarantined rows matched for table '" + table + "'");
-        return applyInternal(loadId, List.of(new ApplyBatch.TableBatch(table, rows)),
+        return applyInternal(loadId, List.of(new ApplyBatch.TableBatch(table, rows)), Map.of(),
                 batch -> keysToDelete.forEach(batch::delete));
     }
 
@@ -613,7 +614,7 @@ public final class EngineImpl implements Engine {
     private static AuditManifest withEndOffset(AuditManifest m, long endOffset) {
         return new AuditManifest(m.loadId(), m.txnId(), m.startedAtMicros(), m.wallClockMillis(),
                 m.walSegment(), m.walStartOffset(), endOffset, m.alreadyApplied(), m.backfill(),
-                m.tables(), m.errors());
+                m.tables(), m.errors(), m.metadata());
     }
 
     private static void deleteRecursive(Path p) {

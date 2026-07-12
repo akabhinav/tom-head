@@ -59,12 +59,14 @@ public final class PublisherPlugin implements EnginePlugin {
     private static final class TableTarget {
         final TableRuntime rt;
         final Path location;
+        final PublishedContract.Style style;
         long publishedTxn = -1;
         long logSeq = -1;
 
         TableTarget(TableRuntime rt, Path location) {
             this.rt = rt;
             this.location = location;
+            this.style = PublishedContract.Style.forConfig(rt.config().publish());
         }
     }
 
@@ -147,7 +149,7 @@ public final class PublisherPlugin implements EnginePlugin {
                 Files.writeString(view, PublishedContract.viewTemplate(
                         t.rt.config().table(),
                         "read_json_auto('" + t.location.toAbsolutePath() + glob + "')",
-                        t.rt.config().businessKey()));
+                        t.rt.config().businessKey(), t.style));
             }
             Path contract = t.location.resolve("_contract.json");
             if (!Files.exists(contract)) {
@@ -160,9 +162,14 @@ public final class PublisherPlugin implements EnginePlugin {
                     cols.add(Map.of("name", col.name(), "type", col.typeDeclaration()));
                 }
                 c.put("columns", cols);
-                c.put("system_columns", List.of(PublishedContract.VALID_FROM, PublishedContract.VALID_TO,
-                        PublishedContract.TX_TIME, PublishedContract.TXN_ID, PublishedContract.OP,
-                        PublishedContract.SCHEMA_VERSION));
+                List<String> sys = new ArrayList<>(List.of(t.style.startCol(), t.style.endCol(),
+                        PublishedContract.TX_TIME, PublishedContract.TXN_ID));
+                if (t.style.includeOps()) {
+                    sys.add(PublishedContract.OP);
+                    sys.add(PublishedContract.SCHEMA_VERSION);
+                }
+                c.put("system_columns", sys);
+                c.put("column_style", t.style.name());
                 c.put("partition_by", t.rt.config().publish().partitionBy());
                 Files.writeString(contract, Json.writePretty(c));
             }
@@ -224,7 +231,9 @@ public final class PublisherPlugin implements EnginePlugin {
                 Codecs.DataKey k = Codecs.decodeDataKey(p.key());
                 TableTarget t = byId.get(k.tableId());
                 if (t == null || rec.txnId() <= t.publishedTxn) continue;
-                rows.computeIfAbsent(k.tableId(), x -> new ArrayList<>()).add(renderRow(t.rt, k, p.value()));
+                Map<String, Object> row = renderRow(t.rt, k, p.value(), t.style);
+                if (row == null) continue; // tombstone, not published in this style
+                rows.computeIfAbsent(k.tableId(), x -> new ArrayList<>()).add(row);
                 ranges.merge(k.tableId(), new long[]{rec.txnId(), rec.txnId()},
                         (a, b) -> new long[]{Math.min(a[0], b[0]), Math.max(a[1], b[1])});
                 if (loadId != null) loadIds.computeIfAbsent(k.tableId(), x -> new ArrayList<>()).add(loadId);
@@ -294,8 +303,14 @@ public final class PublisherPlugin implements EnginePlugin {
         }
     }
 
-    static Map<String, Object> renderRow(TableRuntime rt, Codecs.DataKey k, byte[] value) {
+    /** Renders one version record for publishing; null = suppressed in this style (Databricks tombstones). */
+    static Map<String, Object> renderRow(TableRuntime rt, Codecs.DataKey k, byte[] value, PublishedContract.Style style) {
         Codecs.DecodedValue v = Codecs.decodeValue(value, sv -> rt.config().schemaAt(sv));
+        if (!style.includeOps() && v.op() == Op.DELETE.code) {
+            // Databricks shape: a delete is the predecessor's closed __END_AT with
+            // no successor row — the tombstone itself has no representation.
+            return null;
+        }
         TableSchema written = rt.config().schemaAt(v.schemaVersion());
         Map<String, Object> out = new LinkedHashMap<>();
         for (Column col : rt.config().currentSchema().columns()) {
@@ -303,13 +318,15 @@ public final class PublisherPlugin implements EnginePlugin {
             Object val = idx >= 0 ? v.payload()[idx] : null;
             out.put(col.name(), val == null ? null : col.type().render(val));
         }
-        out.put(PublishedContract.VALID_FROM, io.chronodim.api.ColumnType.formatTimestampMicros(k.validFrom()));
-        out.put(PublishedContract.VALID_TO, v.validTo() == io.chronodim.api.Version.OPEN
+        out.put(style.startCol(), io.chronodim.api.ColumnType.formatTimestampMicros(k.validFrom()));
+        out.put(style.endCol(), v.validTo() == io.chronodim.api.Version.OPEN
                 ? null : io.chronodim.api.ColumnType.formatTimestampMicros(v.validTo()));
         out.put(PublishedContract.TX_TIME, io.chronodim.api.ColumnType.formatTimestampMicros(v.txTime()));
         out.put(PublishedContract.TXN_ID, v.txnId());
-        out.put(PublishedContract.OP, Op.fromCode(v.op()).name());
-        out.put(PublishedContract.SCHEMA_VERSION, (long) v.schemaVersion());
+        if (style.includeOps()) {
+            out.put(PublishedContract.OP, Op.fromCode(v.op()).name());
+            out.put(PublishedContract.SCHEMA_VERSION, (long) v.schemaVersion());
+        }
         return out;
     }
 

@@ -49,6 +49,7 @@ public final class ManifestCodec {
             errors.add(em);
         }
         j.put("errors", errors);
+        if (!m.metadata().isEmpty()) j.put("metadata", m.metadata());
         return Json.write(j);
     }
 
@@ -81,7 +82,8 @@ public final class ManifestCodec {
                 alreadyApplied,
                 Boolean.TRUE.equals(j.get("backfill")),
                 tables,
-                errors);
+                errors,
+                (Map<String, Object>) j.getOrDefault("metadata", Map.of()));
     }
 
     private static long num(Map<String, Object> m, String k) {

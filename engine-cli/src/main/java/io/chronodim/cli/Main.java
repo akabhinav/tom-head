@@ -231,25 +231,73 @@ public final class Main {
         }
     }
 
+    /** Shared input-shaping: envelope resolution, SCD2-interval import, effective_at defaults. */
+    static class IngestOpts {
+        @Option(names = "--load-id", description = "Idempotency key (or 'load_id' inside a JSON envelope)")
+        String loadId;
+        @Option(names = "--format", description = "json | jsonl | csv (default: by extension)")
+        String format;
+        @Option(names = "--scd2-start-column", defaultValue = "__START_AT",
+                description = "Interval-import: start column in the input (default __START_AT)")
+        String scd2Start;
+        @Option(names = "--scd2-end-column", defaultValue = "__END_AT",
+                description = "Interval-import: end column in the input (default __END_AT; null/absent = active)")
+        String scd2End;
+
+        String resolveLoadId(String fromEnvelope) {
+            if (loadId != null && fromEnvelope != null && !loadId.equals(fromEnvelope)) {
+                throw new ValidationException("--load-id '" + loadId + "' conflicts with envelope load_id '" + fromEnvelope + "'");
+            }
+            String resolved = loadId != null ? loadId : fromEnvelope;
+            if (resolved == null) {
+                throw new ValidationException("a load id is required: pass --load-id or put load_id in the JSON envelope");
+            }
+            return resolved;
+        }
+
+        /** Interval-import (rows already carrying start/end) + envelope effective_at defaults. */
+        List<InputRow> shapeRows(Engine e, String table, List<InputRow> rows, String effectiveAt) {
+            TableConfig cfg = e.describeTable(table);
+            if (io.chronodim.core.scd2.Scd2Import.looksLikeScd2(rows, scd2Start)) {
+                rows = io.chronodim.core.scd2.Scd2Import.toInputRows(
+                        ((EngineImpl) e).catalog().get(table), rows, scd2Start, scd2End);
+            }
+            if (effectiveAt == null) return rows;
+            long micros = ColumnType.parseTimestampMicros(effectiveAt);
+            List<InputRow> out = new ArrayList<>(rows.size());
+            for (InputRow r : rows) {
+                if (r.validFromMicrosOverride() != null) {
+                    out.add(r); // interval import already decided
+                } else if (cfg.validTimeMode() == TableConfig.ValidTimeMode.SOURCE_COLUMN
+                        && r.values().get(cfg.validTimeColumn()) != null) {
+                    out.add(r); // the record carries its own effective time
+                } else {
+                    out.add(r.withValidFrom(micros));
+                }
+            }
+            return out;
+        }
+    }
+
     @Command(name = "load", description = "Bulk backfill an empty table from a file (sorted-ingest fast path).")
     static class Load implements Callable<Integer> {
         @CommandLine.Mixin
         EngineOpts opts;
+        @CommandLine.Mixin
+        IngestOpts ingest;
         @Parameters(index = "0", description = "Input file (.json/.jsonl/.csv)")
         Path file;
-        @Option(names = {"-t", "--table"}, required = true)
+        @Option(names = {"-t", "--table"}, description = "Target table (or 'table' inside a JSON envelope)")
         String table;
-        @Option(names = "--load-id", required = true, description = "Idempotency key for this load")
-        String loadId;
-        @Option(names = "--format", description = "json | jsonl | csv (default: by extension)")
-        String format;
 
         @Override
         public Integer call() {
-            Map<String, List<InputRow>> rows = RowFileReader.read(file, format, table);
-            if (rows.size() != 1) throw new ValidationException("load supports a single table");
+            RowFileReader.ParsedInput in = RowFileReader.read(file, ingest.format, table);
+            if (in.byTable().size() != 1) throw new ValidationException("load supports a single table");
+            String t = in.byTable().keySet().iterator().next();
             try (Engine e = opts.open()) {
-                AuditManifest m = e.backfill(loadId, table, rows.values().iterator().next());
+                List<InputRow> rows = ingest.shapeRows(e, t, in.byTable().get(t), in.effectiveAt());
+                AuditManifest m = e.backfill(ingest.resolveLoadId(in.loadId()), t, rows);
                 opts.out(manifestMap(m));
             }
             return 0;
@@ -260,26 +308,27 @@ public final class Main {
     static class Apply implements Callable<Integer> {
         @CommandLine.Mixin
         EngineOpts opts;
+        @CommandLine.Mixin
+        IngestOpts ingest;
         @Parameters(index = "0", arity = "0..1", description = "Input file; omit with --stdin")
         Path file;
-        @Option(names = {"-t", "--table"}, description = "Target table (not needed for JSON object-of-tables input)")
+        @Option(names = {"-t", "--table"}, description = "Target table (not needed for envelopes or object-of-tables input)")
         String table;
-        @Option(names = "--load-id", required = true, description = "Idempotency key (R-APPLY-3)")
-        String loadId;
-        @Option(names = "--format", description = "json | jsonl | csv")
-        String format;
         @Option(names = "--stdin", description = "Read rows from stdin (default format jsonl)")
         boolean stdin;
+        @Option(names = "--full-snapshot", description = "Rows are the complete population: active keys absent from the input are soft-deleted")
+        boolean fullSnapshot;
 
         @Override
         public Integer call() {
-            Map<String, List<InputRow>> byTable = stdin
-                    ? RowFileReader.readStdin(format, table)
-                    : RowFileReader.read(java.util.Objects.requireNonNull(file, "input file or --stdin required"), format, table);
-            List<ApplyBatch.TableBatch> batches = new ArrayList<>();
-            byTable.forEach((t, rows) -> batches.add(new ApplyBatch.TableBatch(t, rows)));
+            RowFileReader.ParsedInput in = stdin
+                    ? RowFileReader.readStdin(ingest.format, table)
+                    : RowFileReader.read(java.util.Objects.requireNonNull(file, "input file or --stdin required"), ingest.format, table);
             try (Engine e = opts.open()) {
-                AuditManifest m = e.apply(new ApplyBatch(loadId, batches));
+                List<ApplyBatch.TableBatch> batches = new ArrayList<>();
+                in.byTable().forEach((t, rows) ->
+                        batches.add(new ApplyBatch.TableBatch(t, ingest.shapeRows(e, t, rows, in.effectiveAt()), fullSnapshot)));
+                AuditManifest m = e.apply(new ApplyBatch(ingest.resolveLoadId(in.loadId()), batches, in.metadata()));
                 opts.out(manifestMap(m));
             }
             return 0;
@@ -448,7 +497,8 @@ public final class Main {
                 TableConfig cfg = e.describeTable(table);
                 if (!cfg.publish().enabled()) throw new ConfigException("table '" + table + "' has publishing disabled");
                 Path location = PublisherPlugin.resolveLocation(cfg.publish().location());
-                opts.out(Finalizer.run(location, cfg.businessKey(), cfg.publish().partitionBy()));
+                opts.out(Finalizer.run(location, cfg.businessKey(), cfg.publish().partitionBy(),
+                        io.chronodim.export.PublishedContract.Style.forConfig(cfg.publish())));
             }
             return 0;
         }

@@ -29,22 +29,36 @@ final class RowFileReader {
 
     static final String OP_FIELD = "_op";
 
+    /** Envelope keys with engine meaning; everything else at the top level is audit metadata. */
+    private static final java.util.Set<String> ENVELOPE_KEYS =
+            java.util.Set.of("table", "load_id", "effective_at", "defaults", "metadata", "records");
+
     private RowFileReader() {}
 
-    /** table → rows. Single-table sources return one entry keyed by {@code defaultTable}. */
-    static Map<String, List<InputRow>> read(Path file, String format, String defaultTable) {
+    /**
+     * Parsed input: rows per table, plus — when the source was a metadata envelope —
+     * the load id, the default effective time, and free-form audit metadata.
+     */
+    record ParsedInput(Map<String, List<InputRow>> byTable, String loadId, String effectiveAt,
+                       Map<String, Object> metadata) {
+        static ParsedInput plain(Map<String, List<InputRow>> byTable) {
+            return new ParsedInput(byTable, null, null, Map.of());
+        }
+    }
+
+    static ParsedInput read(Path file, String format, String defaultTable) {
         String fmt = format != null ? format.toLowerCase(Locale.ROOT) : detect(file);
         try {
             return switch (fmt) {
                 case "json" -> readJson(Files.readString(file), defaultTable);
                 case "jsonl", "ndjson" -> {
                     try (BufferedReader r = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
-                        yield Map.of(requireTable(defaultTable), readJsonl(r));
+                        yield ParsedInput.plain(Map.of(requireTable(defaultTable), readJsonl(r)));
                     }
                 }
                 case "csv" -> {
                     try (BufferedReader r = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
-                        yield Map.of(requireTable(defaultTable), readCsv(r));
+                        yield ParsedInput.plain(Map.of(requireTable(defaultTable), readCsv(r)));
                     }
                 }
                 default -> throw new ValidationException("unsupported input format '" + fmt
@@ -55,13 +69,13 @@ final class RowFileReader {
         }
     }
 
-    static Map<String, List<InputRow>> readStdin(String format, String defaultTable) {
+    static ParsedInput readStdin(String format, String defaultTable) {
         String fmt = format == null ? "jsonl" : format.toLowerCase(Locale.ROOT);
         Reader in = new InputStreamReader(System.in, StandardCharsets.UTF_8);
         try {
             return switch (fmt) {
-                case "jsonl", "ndjson" -> Map.of(requireTable(defaultTable), readJsonl(new BufferedReader(in)));
-                case "csv" -> Map.of(requireTable(defaultTable), readCsv(new BufferedReader(in)));
+                case "jsonl", "ndjson" -> ParsedInput.plain(Map.of(requireTable(defaultTable), readJsonl(new BufferedReader(in))));
+                case "csv" -> ParsedInput.plain(Map.of(requireTable(defaultTable), readCsv(new BufferedReader(in))));
                 case "json" -> {
                     StringBuilder sb = new StringBuilder();
                     char[] buf = new char[8192];
@@ -85,29 +99,64 @@ final class RowFileReader {
     }
 
     @SuppressWarnings("unchecked")
-    private static Map<String, List<InputRow>> readJson(String text, String defaultTable) {
+    private static ParsedInput readJson(String text, String defaultTable) {
         Object parsed = Json.parse(text);
         if (parsed instanceof List<?> arr) {
             List<InputRow> rows = new ArrayList<>(arr.size());
             for (Object o : arr) rows.add(toRow(asMap(o)));
-            return Map.of(requireTable(defaultTable), rows);
+            return ParsedInput.plain(Map.of(requireTable(defaultTable), rows));
         }
         if (parsed instanceof Map<?, ?> obj) {
+            Map<String, Object> m = (Map<String, Object>) obj;
+            if (m.get("records") instanceof List<?> records) {
+                return readEnvelope(m, records, defaultTable);
+            }
             // {"table": [ {...}, ... ], "other_table": [...]} → cross-table transaction
             Map<String, List<InputRow>> out = new LinkedHashMap<>();
             for (Map.Entry<?, ?> e : obj.entrySet()) {
                 if (!(e.getValue() instanceof List<?> arr)) {
                     throw new ValidationException("JSON object input must map table names to row arrays"
-                            + " (key '" + e.getKey() + "' is not an array)");
+                            + " (key '" + e.getKey() + "' is not an array; for a metadata envelope use a 'records' array)");
                 }
                 List<InputRow> rows = new ArrayList<>(arr.size());
                 for (Object o : arr) rows.add(toRow(asMap(o)));
                 out.put(String.valueOf(e.getKey()), rows);
             }
             if (out.isEmpty()) throw new ValidationException("JSON input contains no rows");
-            return out;
+            return ParsedInput.plain(out);
         }
-        throw new ValidationException("JSON input must be an array of rows or an object of table→rows");
+        throw new ValidationException("JSON input must be an array of rows, an object of table→rows,"
+                + " or a metadata envelope with a 'records' array");
+    }
+
+    /**
+     * Metadata envelope: {@code {table, load_id, effective_at, defaults, metadata, records}}.
+     * Unrecognised top-level keys are treated as audit metadata too — teams put
+     * approver/reason/source columns wherever their template says.
+     */
+    @SuppressWarnings("unchecked")
+    private static ParsedInput readEnvelope(Map<String, Object> env, List<?> records, String defaultTable) {
+        String table = env.get("table") != null ? String.valueOf(env.get("table")) : defaultTable;
+        String loadId = env.get("load_id") == null ? null : String.valueOf(env.get("load_id"));
+        String effectiveAt = env.get("effective_at") == null ? null : String.valueOf(env.get("effective_at"));
+        Map<String, Object> defaults = env.get("defaults") == null
+                ? Map.of() : (Map<String, Object>) env.get("defaults");
+
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        if (env.get("metadata") instanceof Map<?, ?> mm) {
+            mm.forEach((k, v) -> metadata.put(String.valueOf(k), v));
+        }
+        for (Map.Entry<String, Object> e : env.entrySet()) {
+            if (!ENVELOPE_KEYS.contains(e.getKey())) metadata.put(e.getKey(), e.getValue());
+        }
+
+        List<InputRow> rows = new ArrayList<>(records.size());
+        for (Object o : records) {
+            Map<String, Object> merged = new LinkedHashMap<>(defaults);
+            merged.putAll(asMap(o));
+            rows.add(toRow(merged));
+        }
+        return new ParsedInput(Map.of(requireTable(table), rows), loadId, effectiveAt, metadata);
     }
 
     private static List<InputRow> readJsonl(BufferedReader r) throws IOException {

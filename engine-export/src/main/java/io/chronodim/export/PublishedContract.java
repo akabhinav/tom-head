@@ -46,6 +46,33 @@ public final class PublishedContract {
     public static final String FINALIZED_DIR = "finalized";
 
     /**
+     * Published column shape. CHRONODIM = full bitemporal log. DATABRICKS = the
+     * {@code __START_AT}/{@code __END_AT} convention: END null = active row, no
+     * operation column, delete tombstones not published (a deleted entity is a
+     * closed final version with no successor). {@code _tx_time}/{@code _txn_id}
+     * remain in both shapes — the commit log and belief-dedup need them.
+     */
+    public record Style(String startCol, String endCol, boolean includeOps) {
+        public static final Style CHRONODIM = new Style(VALID_FROM, VALID_TO, true);
+        public static final Style DATABRICKS = new Style("__START_AT", "__END_AT", false);
+
+        public static Style of(io.chronodim.api.TableConfig.PublishColumnStyle s) {
+            return s == io.chronodim.api.TableConfig.PublishColumnStyle.DATABRICKS ? DATABRICKS : CHRONODIM;
+        }
+
+        /** Preset + per-table overrides — any team's column convention. */
+        public static Style forConfig(io.chronodim.api.TableConfig.PublishConfig p) {
+            return new Style(p.effectiveStartColumn(), p.effectiveEndColumn(), p.effectiveIncludeOps());
+        }
+
+        public String name() {
+            if (this.equals(DATABRICKS)) return "DATABRICKS";
+            if (this.equals(CHRONODIM)) return "CHRONODIM";
+            return "CUSTOM";
+        }
+    }
+
+    /**
      * Hive-style partition path for a rendered row, e.g. {@code region=EU/year=2026}.
      * Partition column values stay in the row payload as well — Spark merges
      * directory-derived partition columns with the data schema (data wins), and
@@ -80,22 +107,30 @@ public final class PublishedContract {
 
     /** SQL view template with placeholders {table}, {source}, {bk_cols}. */
     public static String viewTemplate(String table, String source, java.util.List<String> bkCols) {
+        return viewTemplate(table, source, bkCols, Style.CHRONODIM);
+    }
+
+    public static String viewTemplate(String table, String source, java.util.List<String> bkCols, Style style) {
         String bk = String.join(", ", bkCols);
+        String isCurrent = style.includeOps()
+                ? "(_op <> 'DELETE' AND " + style.endCol() + " IS NULL)"
+                : "(" + style.endCol() + " IS NULL)";
         return """
                 -- ChronoDim SCD2 view over the append-only published log (R-PUB-3).
                 -- Works in DuckDB, Databricks, Spark SQL and Trino.
                 CREATE OR REPLACE VIEW %s_scd2 AS
                 WITH latest AS (
                   SELECT s.*,
-                         ROW_NUMBER() OVER (PARTITION BY %s, _valid_from ORDER BY _tx_time DESC) AS _rn
+                         ROW_NUMBER() OVER (PARTITION BY %s, %s ORDER BY _tx_time DESC) AS _rn
                   FROM %s AS s
                 )
-                SELECT * EXCEPT (_rn, _valid_to),
-                       COALESCE(_valid_to,
-                                LEAD(_valid_from) OVER (PARTITION BY %s ORDER BY _valid_from)) AS _valid_to,
-                       (_op <> 'DELETE' AND _valid_to IS NULL) AS _is_current
+                SELECT * EXCEPT (_rn, %s),
+                       COALESCE(%s,
+                                LEAD(%s) OVER (PARTITION BY %s ORDER BY %s)) AS %s,
+                       %s AS _is_current
                 FROM latest
                 WHERE _rn = 1;
-                """.formatted(table, bk, source, bk);
+                """.formatted(table, bk, style.startCol(), source,
+                style.endCol(), style.endCol(), style.startCol(), bk, style.startCol(), style.endCol(), isCurrent);
     }
 }
