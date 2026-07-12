@@ -105,6 +105,23 @@ publish:
   location: ./export/customer
 EOF
 chronodim table create -d ./dims -f customer.yaml
+```
+
+**`business_key` is the table's primary key.** One column or a combination —
+uniqueness always holds on the *full* combination:
+
+```yaml
+business_key: [account_id, symbol]     # composite: (A1, AAPL) ≠ (A1, MSFT)
+```
+
+Like a primary key it is NOT NULL by definition (a row missing any key part
+is rejected with a reason), immutable (`table alter` refuses key changes —
+rekeying would silently re-identify every entity), and scalar-only. Unlike a
+plain database, "unique" here means one *live entity* per combination:
+re-sending the same key doesn't violate uniqueness, it *versions* that entity
+(update / no-op), which is exactly the upsert semantics adjustments need.
+
+```bash
 
 # 3. load data — a single JSON file, CSV, or JSON Lines all work
 chronodim apply changes.json  -d ./dims -t customer --load-id load-2026-07-11   # JSON array
