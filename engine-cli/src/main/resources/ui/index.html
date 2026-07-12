@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChronoDim Console</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #1c2430; --muted: #68727f;
+    --line: #e3e7ec; --accent: #2563eb; --accent-ink: #ffffff;
+    --side: #16202e; --side-ink: #c6d0dc; --side-hi: #22304a;
+    --ok: #16803c; --warn: #b45309; --bad: #b91c1c; --chip: #eef2f7;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+         color: var(--ink); background: var(--bg); display: flex; height: 100vh; overflow: hidden; }
+
+  /* ---- sidebar ---- */
+  #side { width: 230px; flex: none; background: var(--side); color: var(--side-ink);
+          display: flex; flex-direction: column; }
+  #brand { padding: 16px 16px 12px; font-weight: 700; font-size: 16px; color: #fff; letter-spacing: .3px; }
+  #brand small { display: block; font-weight: 400; color: #7d8ba0; font-size: 11px; margin-top: 2px; }
+  #tables { flex: 1; overflow-y: auto; padding: 4px 8px; }
+  .tbl { padding: 8px 10px; border-radius: 6px; cursor: pointer; font-family: var(--mono); font-size: 13px; }
+  .tbl:hover { background: var(--side-hi); }
+  .tbl.sel { background: var(--accent); color: #fff; }
+  #side footer { padding: 10px 16px; font-size: 11px; color: #7d8ba0; border-top: 1px solid #22304a; }
+  #newTableBtn { margin: 8px 12px; padding: 8px; border: 1px dashed #3b4c68; background: none;
+                 color: var(--side-ink); border-radius: 6px; cursor: pointer; font-size: 13px; }
+  #newTableBtn:hover { border-color: var(--accent); color: #fff; }
+
+  /* ---- main ---- */
+  #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #top { background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 20px 0; }
+  #tname { font-size: 17px; font-weight: 700; font-family: var(--mono); }
+  #tmeta { color: var(--muted); font-size: 12px; margin: 2px 0 8px; }
+  #tabs { display: flex; gap: 2px; }
+  .tab { padding: 7px 14px; cursor: pointer; border: none; background: none; font-size: 13px;
+         color: var(--muted); border-bottom: 2px solid transparent; }
+  .tab.sel { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+  #body { flex: 1; overflow: auto; padding: 16px 20px; }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  input, select, textarea, button { font: inherit; }
+  input[type=text], select { padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+  textarea { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 10px;
+             font-family: var(--mono); font-size: 12.5px; }
+  button.b { padding: 6px 14px; border: 1px solid var(--line); background: #fff; border-radius: 6px; cursor: pointer; }
+  button.b:hover { border-color: var(--accent); color: var(--accent); }
+  button.p { padding: 6px 14px; border: 1px solid var(--accent); background: var(--accent);
+             color: var(--accent-ink); border-radius: 6px; cursor: pointer; }
+  button.p:hover { filter: brightness(1.1); }
+  button:disabled { opacity: .45; cursor: default; }
+
+  table.grid { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 12.5px; }
+  .grid th { text-align: left; padding: 6px 10px; border-bottom: 2px solid var(--line);
+             position: sticky; top: -17px; background: var(--panel); font-size: 11.5px;
+             color: var(--muted); white-space: nowrap; }
+  .grid td { padding: 5px 10px; border-bottom: 1px solid var(--line); white-space: nowrap;
+             max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+  .grid tr.rowlink { cursor: pointer; }
+  .grid tr.rowlink:hover td { background: #f0f5ff; }
+  td.key { font-weight: 700; }
+  td.null { color: #b6bec8; font-style: italic; }
+  td.changed { background: #fef3c7; }
+  tr.dead td { color: #9aa4b0; text-decoration: line-through; }
+
+  .chip { display: inline-block; background: var(--chip); border-radius: 10px; padding: 1px 9px;
+          font-size: 11px; margin-right: 4px; color: var(--muted); }
+  .pill { display: inline-block; border-radius: 4px; padding: 1px 7px; font-size: 11px; font-weight: 600; }
+  .pill.INSERT { background: #dcfce7; color: var(--ok); }
+  .pill.UPDATE { background: #dbeafe; color: var(--accent); }
+  .pill.DELETE { background: #fee2e2; color: var(--bad); }
+  .pill.open { background: #dcfce7; color: var(--ok); }
+
+  #msg { position: fixed; right: 18px; bottom: 18px; max-width: 460px; z-index: 60; }
+  .toast { background: #1c2430; color: #fff; border-radius: 8px; padding: 10px 14px; margin-top: 8px;
+           font-size: 13px; box-shadow: 0 6px 20px rgba(0,0,0,.25); white-space: pre-wrap; }
+  .toast.err { background: var(--bad); }
+
+  #modal { position: fixed; inset: 0; background: rgba(15,23,42,.55); display: none;
+           align-items: center; justify-content: center; z-index: 50; }
+  #modal.on { display: flex; }
+  #modal .box { background: #fff; border-radius: 10px; width: min(680px, 92vw); max-height: 88vh;
+                overflow: auto; padding: 18px; }
+  .receipt { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; margin-top: 10px; }
+  .stat { background: var(--chip); border-radius: 8px; padding: 8px 10px; text-align: center; }
+  .stat b { display: block; font-size: 18px; font-family: var(--mono); }
+  .stat span { font-size: 11px; color: var(--muted); }
+  h3 { margin: 4px 0 10px; font-size: 14px; }
+  .hint { color: var(--muted); font-size: 12px; }
+  pre.j { background: #0f172a; color: #d6e2f0; padding: 12px; border-radius: 8px;
+          font-size: 12px; overflow: auto; font-family: var(--mono); }
+  .empty { color: var(--muted); text-align: center; padding: 30px 0; }
+</style>
+</head>
+<body>
+
+<nav id="side">
+  <div id="brand">ChronoDim<small>bitemporal SCD2 console</small></div>
+  <div id="tables"></div>
+  <button id="newTableBtn" onclick="openCreate()">+ New table</button>
+  <footer id="sideStats">—</footer>
+</nav>
+
+<div id="main">
+  <div id="top">
+    <div id="tname">—</div>
+    <div id="tmeta"></div>
+    <div id="tabs"></div>
+  </div>
+  <div id="body"><div class="empty">Create or select a table to begin.</div></div>
+</div>
+
+<div id="msg"></div>
+<div id="modal"><div class="box" id="modalBox"></div></div>
+
+<script>
+"use strict";
+/* ChronoDim console — hand-written vanilla JS, no frameworks, no dependencies. */
+
+const $ = (s, el) => (el || document).querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+const state = {
+  tables: [],          // describe() of every table
+  sel: null,           // selected table describe()
+  tab: 'Data',
+  offset: 0, hasMore: false,
+  showSys: false,
+  entityKey: null,     // prefill for the Entity tab
+  adjustMode: 'form',
+  formRows: [],        // adjust form model: [{values:{col:string}, del:bool}]
+};
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const text = await r.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = { error: text }; }
+  if (!r.ok) throw new Error(data.error || (r.status + ' ' + r.statusText));
+  return data;
+}
+
+function toast(text, err) {
+  const d = document.createElement('div');
+  d.className = 'toast' + (err ? ' err' : '');
+  d.textContent = text;
+  $('#msg').appendChild(d);
+  setTimeout(() => d.remove(), err ? 9000 : 4000);
+}
+
+/* ---------- boot + sidebar ---------- */
+
+async function boot() {
+  const [t, s] = await Promise.all([api('/api/tables'), api('/api/stats')]);
+  state.tables = t.tables;
+  $('#sideStats').textContent = 'txn ' + s.last_committed_txn + ' · ' + state.tables.length + ' table(s)';
+  renderSidebar();
+  if (!state.sel && state.tables.length) selectTable(state.tables[0].table);
+  else if (state.sel) {
+    state.sel = state.tables.find(x => x.table === state.sel.table) || null;
+    render();
+  }
+}
+
+function renderSidebar() {
+  $('#tables').innerHTML = state.tables.map(t =>
+    `<div class="tbl${state.sel && state.sel.table === t.table ? ' sel' : ''}"
+          onclick="selectTable('${esc(t.table)}')">${esc(t.table)}</div>`).join('')
+    || '<div class="hint" style="padding:10px">no tables yet</div>';
+}
+
+function selectTable(name) {
+  state.sel = state.tables.find(t => t.table === name);
+  state.tab = 'Data'; state.offset = 0; state.entityKey = null;
+  state.formRows = []; addFormRow();
+  renderSidebar(); render();
+}
+
+/* ---------- layout ---------- */
+
+const TABS = ['Data', 'Entity', 'Adjust', 'Audit', 'Quarantine', 'Health'];
+
+function render() {
+  const t = state.sel;
+  if (!t) {
+    $('#tname').textContent = '—'; $('#tmeta').textContent = ''; $('#tabs').innerHTML = '';
+    $('#body').innerHTML = '<div class="empty">Create or select a table to begin.</div>';
+    return;
+  }
+  $('#tname').textContent = t.table;
+  $('#tmeta').innerHTML =
+    `<span class="chip">key: ${t.business_key.map(esc).join(', ')}</span>` +
+    `<span class="chip">valid time: ${esc(t.valid_time_mode)}${t.valid_time_column ? ' (' + esc(t.valid_time_column) + ')' : ''}</span>` +
+    `<span class="chip">late: ${esc(t.late_arrival)}</span>` +
+    `<span class="chip">schema v${t.schema_version}</span>` +
+    (t.publish.enabled ? `<span class="chip">publishes ${esc(t.publish.start_column)}/${esc(t.publish.end_column)}</span>` : '');
+  $('#tabs').innerHTML = TABS.map(x =>
+    `<button class="tab${x === state.tab ? ' sel' : ''}" onclick="setTab('${x}')">${x}</button>`).join('');
+  ({ Data: renderData, Entity: renderEntity, Adjust: renderAdjust,
+     Audit: renderAudit, Quarantine: renderQuarantine, Health: renderHealth }[state.tab])();
+}
+
+function setTab(t) { state.tab = t; render(); }
+
+/* ---------- Data tab ---------- */
+
+function renderData() {
+  $('#body').innerHTML = `
+    <div class="panel">
+      <div class="bar">
+        <input type="text" id="q" placeholder="filter (substring)" style="width:200px"
+               onkeydown="if(event.key==='Enter'){state.offset=0;loadRows()}">
+        <input type="text" id="asof" placeholder="as of… 2026-01-01T00:00:00Z" style="width:220px"
+               onkeydown="if(event.key==='Enter'){state.offset=0;loadRows()}">
+        <button class="p" onclick="state.offset=0;loadRows()">Query</button>
+        <label class="hint"><input type="checkbox" ${state.showSys ? 'checked' : ''}
+               onchange="state.showSys=this.checked;loadRows()"> system columns</label>
+        <span style="flex:1"></span>
+        <button class="b" id="prev" onclick="page(-1)">‹ Prev</button>
+        <button class="b" id="next" onclick="page(1)">Next ›</button>
+      </div>
+      <div id="gridWrap"><div class="empty">loading…</div></div>
+      <div class="hint" style="margin-top:8px">Click a row to open its full bitemporal history.</div>
+    </div>`;
+  loadRows();
+}
+
+const PAGE = 50;
+async function loadRows() {
+  const t = state.sel;
+  const q = encodeURIComponent($('#q') ? $('#q').value : '');
+  const asof = encodeURIComponent($('#asof') ? $('#asof').value : '');
+  try {
+    const d = await api(`/api/tables/${t.table}/rows?limit=${PAGE}&offset=${state.offset}&q=${q}&as_of=${asof}`);
+    state.hasMore = d.has_more;
+    $('#prev').disabled = state.offset === 0;
+    $('#next').disabled = !d.has_more;
+    const cols = t.columns.map(c => c.name);
+    const sys = state.showSys ? ['_valid_from', '_valid_to', '_tx_time', '_txn_id', '_op'] : [];
+    if (!d.rows.length) { $('#gridWrap').innerHTML = '<div class="empty">no rows</div>'; return; }
+    $('#gridWrap').innerHTML = `<table class="grid"><thead><tr>
+        ${cols.map(c => `<th>${esc(c)}</th>`).join('')}${sys.map(c => `<th>${esc(c)}</th>`).join('')}
+      </tr></thead><tbody>` +
+      d.rows.map((v, i) => `<tr class="rowlink" onclick="openEntity(${i})" data-i="${i}">` +
+        cols.map(c => cell(v.row[c], t.columns.find(x => x.name === c).key)).join('') +
+        sys.map(c => cell(v[c], false)).join('') +
+      '</tr>').join('') + '</tbody></table>';
+    state._page = d.rows;
+  } catch (e) { $('#gridWrap').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+function cell(v, isKey) {
+  if (v === null || v === undefined) return '<td class="null">null</td>';
+  const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+  return `<td class="${isKey ? 'key' : ''}" title="${esc(s)}">${esc(s)}</td>`;
+}
+
+function page(dir) {
+  state.offset = Math.max(0, state.offset + dir * PAGE);
+  loadRows();
+}
+
+function openEntity(i) {
+  const v = state._page[i];
+  state.entityKey = {};
+  for (const k of state.sel.business_key) state.entityKey[k] = v.row[k];
+  setTab('Entity');
+}
+
+/* ---------- Entity tab (history) ---------- */
+
+function renderEntity() {
+  const t = state.sel;
+  const key = state.entityKey || {};
+  $('#body').innerHTML = `
+    <div class="panel">
+      <h3>Entity lookup</h3>
+      <div class="bar">
+        ${t.business_key.map(k =>
+          `<label class="hint">${esc(k)} <input type="text" id="k_${esc(k)}" value="${esc(key[k] ?? '')}"
+             onkeydown="if(event.key==='Enter')loadHistory()"></label>`).join('')}
+        <button class="p" onclick="loadHistory()">History</button>
+      </div>
+      <div id="hist"><div class="hint">Every version ever recorded — newest first. Nothing is ever rewritten:
+        corrections appear as new records that supersede old beliefs.</div></div>
+    </div>`;
+  if (state.entityKey) loadHistory();
+}
+
+async function loadHistory() {
+  const t = state.sel;
+  const qs = t.business_key.map(k => `${encodeURIComponent(k)}=${encodeURIComponent($('#k_' + k).value)}`).join('&');
+  try {
+    const d = await api(`/api/tables/${t.table}/history?${qs}`);
+    if (!d.versions.length) { $('#hist').innerHTML = '<div class="empty">no versions for this key</div>'; return; }
+    const cols = t.columns.map(c => c.name).filter(c => !t.business_key.includes(c));
+    $('#hist').innerHTML = `<table class="grid"><thead><tr>
+        <th>valid_from</th><th>valid_to</th><th>op</th><th>current</th><th>txn</th><th>recorded_at</th>
+        ${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>` +
+      d.versions.map((v, i) => {
+        const older = d.versions[i + 1];
+        return `<tr class="${v._op === 'DELETE' ? 'dead' : ''}">
+          <td>${esc(v._valid_from)}</td>
+          <td>${v._valid_to === null ? '<span class="pill open">open</span>' : esc(v._valid_to)}</td>
+          <td><span class="pill ${esc(v._op)}">${esc(v._op)}</span></td>
+          <td>${v._is_current ? '✔' : ''}</td>
+          <td>${esc(v._txn_id)}</td><td>${esc(v._tx_time)}</td>` +
+          cols.map(c => {
+            const cur = JSON.stringify(v.row[c] ?? null);
+            const was = older ? JSON.stringify(older.row[c] ?? null) : cur;
+            const changed = older && cur !== was;
+            if (v.row[c] === null || v.row[c] === undefined)
+              return `<td class="null${changed ? ' changed' : ''}">null</td>`;
+            const s = typeof v.row[c] === 'object' ? JSON.stringify(v.row[c]) : String(v.row[c]);
+            return `<td class="${changed ? 'changed' : ''}" title="${esc(s)}">${esc(s)}</td>`;
+          }).join('') + '</tr>';
+      }).join('') + '</tbody></table>' +
+      '<div class="hint" style="margin-top:8px">Highlighted cells changed versus the previous version.</div>';
+  } catch (e) { $('#hist').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+/* ---------- Adjust tab ---------- */
+
+function renderAdjust() {
+  const t = state.sel;
+  const mode = state.adjustMode;
+  $('#body').innerHTML = `
+    <div class="panel">
+      <div class="bar">
+        <h3 style="margin:0">Submit adjustments</h3>
+        <span style="flex:1"></span>
+        <button class="${mode === 'form' ? 'p' : 'b'}" onclick="state.adjustMode='form';render()">Form</button>
+        <button class="${mode === 'json' ? 'p' : 'b'}" onclick="state.adjustMode='json';render()">JSON / CSV</button>
+      </div>
+      <div class="bar">
+        <label class="hint">load_id <input type="text" id="loadId" value="ui-${Date.now()}" style="width:190px"></label>
+        <label class="hint">effective_at <input type="text" id="effAt" placeholder="optional, 2026-01-01T00:00:00Z" style="width:230px"></label>
+        ${mode === 'json' ? `<label class="hint">format <select id="fmt">
+            <option>json</option><option>jsonl</option><option>csv</option></select></label>
+          <label class="hint"><input type="checkbox" id="fullSnap"> full snapshot (absent keys → soft delete)</label>` : ''}
+      </div>
+      ${mode === 'form' ? formEditor(t) : jsonEditor(t)}
+      <div class="bar" style="margin-top:10px">
+        <button class="p" onclick="submitAdjust()">Apply batch</button>
+        <span class="hint">Atomic, durable, idempotent — resubmitting the same load_id never double-applies.</span>
+      </div>
+      <div id="receipt"></div>
+    </div>`;
+}
+
+function formEditor(t) {
+  const cols = t.columns;
+  return `<table class="grid"><thead><tr>
+      ${cols.map(c => `<th>${esc(c.name)}<br><span style="font-weight:400">${esc(c.type)}</span></th>`).join('')}
+      <th>delete?</th><th></th></tr></thead><tbody>` +
+    state.formRows.map((r, i) => '<tr>' +
+      cols.map(c => `<td><input type="text" style="width:110px" value="${esc(r.values[c.name] ?? '')}"
+          oninput="state.formRows[${i}].values['${esc(c.name)}']=this.value"
+          placeholder="${c.key ? 'key' : ''}"></td>`).join('') +
+      `<td><input type="checkbox" ${r.del ? 'checked' : ''} onchange="state.formRows[${i}].del=this.checked"></td>
+       <td><button class="b" onclick="state.formRows.splice(${i},1);render()">✕</button></td></tr>`).join('') +
+    `</tbody></table>
+     <div class="bar" style="margin-top:8px"><button class="b" onclick="addFormRow();render()">+ Add row</button>
+       <span class="hint">Leave a cell blank for NULL. Complex types (array/map/struct) accept JSON.
+         “delete” closes the entity's current version with a tombstone — history stays.</span></div>`;
+}
+
+function addFormRow() { state.formRows.push({ values: {}, del: false }); }
+
+function jsonEditor(t) {
+  const key = t.business_key[0] || 'id';
+  const tpl = JSON.stringify({
+    table: t.table, load_id: 'ADJ-2026-001', effective_at: null,
+    metadata: { reason: 'quarterly adjustment', approved_by: 'you' },
+    records: [{ [key]: 'K1' }],
+  }, null, 2);
+  return `<textarea id="jsonBody" rows="14" spellcheck="false">${esc(tpl)}</textarea>
+    <div class="hint" style="margin-top:6px">Accepts the metadata envelope, a bare JSON array of rows, JSONL,
+      or CSV with a header — the same formats the CLI takes. Rows with __START_AT/__END_AT are auto-detected
+      as an SCD2 interval import. envelope load_id wins over the field above.</div>`;
+}
+
+async function submitAdjust() {
+  const t = state.sel;
+  const loadId = encodeURIComponent($('#loadId').value.trim());
+  const effAt = encodeURIComponent($('#effAt').value.trim());
+  let body, fmt = 'json', fullSnap = false;
+  if (state.adjustMode === 'form') {
+    const rows = [];
+    for (const r of state.formRows) {
+      const o = {};
+      for (const c of t.columns) {
+        const raw = (r.values[c.name] ?? '').trim();
+        if (raw !== '') o[c.name] = maybeJson(raw, c.type);
+      }
+      if (Object.keys(o).length === 0) continue;
+      if (r.del) o._op = 'delete';
+      rows.push(o);
+    }
+    if (!rows.length) { toast('nothing to apply — add at least one row', true); return; }
+    body = JSON.stringify(rows);
+  } else {
+    body = $('#jsonBody').value;
+    fmt = $('#fmt').value;
+    fullSnap = $('#fullSnap').checked;
+  }
+  try {
+    const m = await api(`/api/tables/${t.table}/apply?load_id=${loadId}&effective_at=${effAt}&format=${fmt}&full_snapshot=${fullSnap}`,
+      { method: 'POST', body });
+    showReceipt(m);
+    boot();
+  } catch (e) { toast(e.message, true); }
+}
+
+/* Complex-typed cells may be JSON ({"city":"X"} / [1,2]); scalars stay strings for engine coercion. */
+function maybeJson(raw, type) {
+  if (/^(array|map|struct)/.test(type) || /^[[{]/.test(raw)) {
+    try { return JSON.parse(raw); } catch { return raw; }
+  }
+  return raw;
+}
+
+function showReceipt(m) {
+  const st = (m.tables && m.tables[0]) || {};
+  const dup = m.already_applied;
+  $('#receipt').innerHTML = `
+    <div class="panel" style="margin-top:12px; ${dup ? 'border-color:#f59e0b' : ''}">
+      <h3>${dup ? '⚠ duplicate load_id — already applied earlier, original receipt returned (nothing re-applied)'
+                : '✓ applied'} — load <span style="font-family:var(--mono)">${esc(m.load_id)}</span>, txn ${esc(m.txn_id)}</h3>
+      <div class="receipt">
+        ${['rows_in', 'inserts', 'updates', 'no_ops', 'deletes', 'late_splits', 'rejects', 'quarantined']
+          .map(k => `<div class="stat"><b>${st[k] ?? 0}</b><span>${k}</span></div>`).join('')}
+      </div>
+      ${(m.errors && m.errors.length) ? `<pre class="j">${esc(JSON.stringify(m.errors, null, 2))}</pre>` : ''}
+    </div>`;
+  if (!dup) toast('batch applied — txn ' + m.txn_id);
+}
+
+/* ---------- Audit tab ---------- */
+
+async function renderAudit() {
+  $('#body').innerHTML = '<div class="panel"><h3>Audit manifests (newest first)</h3><div id="man">loading…</div></div>';
+  try {
+    const d = await api(`/api/manifests?table=${state.sel.table}&limit=100`);
+    if (!d.manifests.length) { $('#man').innerHTML = '<div class="empty">no loads yet</div>'; return; }
+    $('#man').innerHTML = `<table class="grid"><thead><tr><th>load_id</th><th>txn</th><th>started</th>
+        <th>rows</th><th>ins</th><th>upd</th><th>del</th><th>no-op</th><th>rej</th><th>ms</th><th>metadata</th>
+      </tr></thead><tbody>` +
+      d.manifests.map(m => {
+        const s = (m.tables || []).reduce((a, t) => {
+          for (const k of ['rows_in', 'inserts', 'updates', 'deletes', 'no_ops', 'rejects']) a[k] = (a[k] || 0) + (t[k] || 0);
+          return a;
+        }, {});
+        const meta = m.metadata && Object.keys(m.metadata).length ? JSON.stringify(m.metadata) : '';
+        return `<tr><td class="key">${esc(m.load_id)}</td><td>${esc(m.txn_id)}</td>
+          <td>${esc(microsToIso(m.started_at_micros))}</td>
+          <td>${s.rows_in || 0}</td><td>${s.inserts || 0}</td><td>${s.updates || 0}</td>
+          <td>${s.deletes || 0}</td><td>${s.no_ops || 0}</td><td>${s.rejects || 0}</td>
+          <td>${esc(m.wall_clock_millis)}</td><td title="${esc(meta)}">${esc(meta)}</td></tr>`;
+      }).join('') + '</tbody></table>';
+  } catch (e) { $('#man').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+function microsToIso(us) {
+  return us ? new Date(Math.floor(us / 1000)).toISOString().replace('.000', '') : '';
+}
+
+/* ---------- Quarantine tab ---------- */
+
+async function renderQuarantine() {
+  $('#body').innerHTML = `<div class="panel">
+      <div class="bar"><h3 style="margin:0">Quarantined rows</h3><span style="flex:1"></span>
+        <button class="p" onclick="reapplyQuarantine()">Re-apply all</button></div>
+      <div id="quar">loading…</div></div>`;
+  try {
+    const d = await api(`/api/quarantine?table=${state.sel.table}`);
+    if (!d.quarantined.length) { $('#quar').innerHTML = '<div class="empty">quarantine is empty 🎉</div>'; return; }
+    $('#quar').innerHTML = `<table class="grid"><thead><tr>
+        <th>id</th><th>reason</th><th>load_id</th><th>at</th><th>values</th></tr></thead><tbody>` +
+      d.quarantined.map(q => `<tr><td>${esc(q.id)}</td><td>${esc(q.reason)}</td>
+        <td>${esc(q.load_id)}</td><td>${esc(q.at)}</td>
+        <td title="${esc(JSON.stringify(q.values))}">${esc(JSON.stringify(q.values))}</td></tr>`).join('') +
+      '</tbody></table>';
+  } catch (e) { $('#quar').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+async function reapplyQuarantine() {
+  try {
+    const m = await api('/api/quarantine/reapply', {
+      method: 'POST',
+      body: JSON.stringify({ table: state.sel.table, ids: [], load_id: 'requar-' + Date.now() }),
+    });
+    toast('re-applied under load ' + m.load_id + ' (txn ' + m.txn_id + ')');
+    renderQuarantine();
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ---------- Health tab ---------- */
+
+async function renderHealth() {
+  $('#body').innerHTML = `<div class="panel"><h3>Engine stats</h3><pre class="j" id="stats">loading…</pre></div>
+    <div class="panel"><div class="bar"><h3 style="margin:0">Integrity check</h3>
+      <button class="b" onclick="runVerify()">Run verify (full scan)</button></div>
+      <pre class="j" id="verify">not run — computes an order-independent fingerprint of the entire state.</pre></div>`;
+  try { $('#stats').textContent = JSON.stringify(await api('/api/stats'), null, 2); }
+  catch (e) { $('#stats').textContent = e.message; }
+}
+
+async function runVerify() {
+  $('#verify').textContent = 'scanning…';
+  try { $('#verify').textContent = JSON.stringify(await api('/api/verify'), null, 2); }
+  catch (e) { $('#verify').textContent = e.message; }
+}
+
+/* ---------- create table modal ---------- */
+
+const YAML_TEMPLATE = `table: my_table
+business_key: [id]
+schema:
+  - {name: id,         type: string}
+  - {name: name,       type: string}
+  - {name: amount,     type: "decimal(18,4)"}
+  - {name: updated_at, type: timestamp}
+valid_time:
+  mode: source_column          # or load_time
+  column: updated_at
+late_arrival:
+  policy: split                # split | reject | quarantine
+deletes:
+  mode: soft                   # soft | ignore
+on_row_error: quarantine       # fail_batch | skip_rows | quarantine
+quality_gates:
+  - {column: name, rule: not_null}
+# publish:                     # optional cold tier
+#   enabled: true
+#   location: ./published/my_table
+#   column_style: databricks   # __START_AT / __END_AT
+`;
+
+function openCreate() {
+  $('#modalBox').innerHTML = `<h3>Create table</h3>
+    <p class="hint">Paste a table config (YAML or JSON) — same file the CLI's <code>table create</code> takes.</p>
+    <textarea id="yaml" rows="18" spellcheck="false">${esc(YAML_TEMPLATE)}</textarea>
+    <div class="bar" style="margin-top:10px">
+      <button class="p" onclick="createTable()">Create</button>
+      <button class="b" onclick="$('#modal').classList.remove('on')">Cancel</button>
+    </div>`;
+  $('#modal').classList.add('on');
+}
+
+async function createTable() {
+  try {
+    const t = await api('/api/tables', { method: 'POST', body: $('#yaml').value });
+    $('#modal').classList.remove('on');
+    toast('table ' + t.table + ' created');
+    await boot();
+    selectTable(t.table);
+  } catch (e) { toast(e.message, true); }
+}
+
+$('#modal').addEventListener('click', e => { if (e.target.id === 'modal') e.target.classList.remove('on'); });
+
+boot().catch(e => toast(e.message, true));
+</script>
+</body>
+</html>

@@ -69,6 +69,23 @@ final class RowFileReader {
         }
     }
 
+    /** Same parsing as {@link #read}, from an in-memory body (used by the HTTP UI). */
+    static ParsedInput readString(String text, String format, String defaultTable) {
+        String fmt = format == null ? "json" : format.toLowerCase(Locale.ROOT);
+        try {
+            return switch (fmt) {
+                case "json" -> readJson(text, defaultTable);
+                case "jsonl", "ndjson" -> ParsedInput.plain(Map.of(requireTable(defaultTable),
+                        readJsonl(new BufferedReader(new java.io.StringReader(text)))));
+                case "csv" -> ParsedInput.plain(Map.of(requireTable(defaultTable),
+                        readCsv(new java.io.StringReader(text))));
+                default -> throw new ValidationException("unsupported input format '" + fmt + "' (json, jsonl or csv)");
+            };
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
     static ParsedInput readStdin(String format, String defaultTable) {
         String fmt = format == null ? "jsonl" : format.toLowerCase(Locale.ROOT);
         Reader in = new InputStreamReader(System.in, StandardCharsets.UTF_8);

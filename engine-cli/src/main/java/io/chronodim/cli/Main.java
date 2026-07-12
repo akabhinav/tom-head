@@ -52,6 +52,7 @@ import java.util.concurrent.Callable;
                 Main.ExportStatus.class, Main.FinalizeCmd.class,
                 Main.Snapshot.class, Main.WalPrune.class, Main.Restore.class, Main.Verify.class,
                 Main.Manifest.class, Main.Quarantine.class, Main.Stats.class, Main.Bench.class,
+                Main.Ui.class,
         })
 public final class Main {
 
@@ -694,6 +695,29 @@ public final class Main {
         public Integer call() {
             try (Engine e = opts.open()) {
                 opts.out(e.stats());
+            }
+            return 0;
+        }
+    }
+
+    @Command(name = "ui", description = "Serve the built-in admin console (framework-free: JDK HttpServer + one HTML page). "
+            + "This process holds the single-writer lock; any number of browsers/users may work through it concurrently.")
+    static class Ui implements Callable<Integer> {
+        @CommandLine.Mixin
+        EngineOpts opts;
+        @Option(names = "--port", defaultValue = "8420", description = "Listen port (default 8420; 0 = ephemeral)")
+        int port;
+        @Option(names = "--host", defaultValue = "127.0.0.1",
+                description = "Bind address. The console has no auth — keep it on localhost unless you know better.")
+        String host;
+
+        @Override
+        public Integer call() throws Exception {
+            try (Engine e = opts.open()) {
+                UiServer server = UiServer.start(e, host, port);
+                System.out.println("ChronoDim console →  http://" + host + ":" + server.port()
+                        + "   (data: " + opts.dataDir + ", Ctrl-C to stop)");
+                Thread.currentThread().join(); // serve until interrupted
             }
             return 0;
         }

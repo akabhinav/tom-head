@@ -210,6 +210,37 @@ transaction:
 chronodim apply multi.json -d ./dims --load-id adj-batch-7
 ```
 
+## Built-in console (UI)
+
+Everything you'd do against a normal database, in a browser — with zero
+frameworks. The server is the JDK's own `HttpServer`, the page is one
+hand-written HTML file baked into the jar; there is no React, no npm, no CDN,
+nothing to install.
+
+```bash
+chronodim ui -d ./dims            # → http://127.0.0.1:8420
+```
+
+| Tab | What it does |
+|---|---|
+| **Data** | Browse current rows (or *as-of* any past date), substring filter, paging, optional system columns |
+| **Entity** | Full bitemporal history of one key — every version ever recorded, changed cells highlighted, superseded beliefs included |
+| **Adjust** | Submit adjustment batches: a spreadsheet-style form, or paste the JSON envelope / JSONL / CSV — identical formats to the CLI |
+| **Audit** | Every load's manifest: who/when/what counts, free-form metadata |
+| **Quarantine** | Inspect gate-failed rows, re-apply after fixing |
+| **Health** | Engine stats, on-demand full-scan integrity fingerprint |
+
+Creating a table is the same YAML the CLI takes, pasted into the *New table*
+dialog. Applies are atomic and idempotent — the form generates a `load_id`,
+and resubmitting a duplicate shows the original receipt instead of
+double-applying.
+
+The `ui` process holds the single-writer lock, which makes it the recommended
+deployment for shared use: any number of people work through one console
+process concurrently (the engine's thread-safe apply path — see the
+Concurrency model section). It binds to `127.0.0.1` and has no authentication;
+pass `--host` only if you understand what that exposes.
+
 ## Library use
 
 ```java
