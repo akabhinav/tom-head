@@ -242,6 +242,15 @@ nothing to install.
 chronodim ui -d ./dims            # → http://127.0.0.1:8420
 ```
 
+Or let one script do everything — build if needed, seed demo data, start the
+console, and smoke-test 12 behaviors through the HTTP API (time travel,
+idempotent duplicate loads, gate rejections, audit trail, fingerprint):
+
+```bash
+scripts/ui-demo.sh                # ...then leaves the UI running for you
+scripts/ui-demo.sh --ci           # same, but tears down after — exit 0/1 for CI
+```
+
 | Tab | What it does |
 |---|---|
 | **Data** | Browse current rows (or *as-of* any past date), substring filter, paging, optional system columns |

@@ -214,6 +214,10 @@ ls export/customer                              # the published cold tier:
 
 ## 8. Verify in the UI
 
+> Shortcut: `scripts/ui-demo.sh` automates this whole section against a fresh
+> demo database — builds if needed, seeds data, starts the console, runs 12
+> API smoke checks, and leaves the UI running (`--ci` to tear down instead).
+
 ```bash
 java -jar $JAR ui -d $DATA
 # ChronoDim console →  http://127.0.0.1:8420   (Ctrl-C to stop)
