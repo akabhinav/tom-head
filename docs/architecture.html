@@ -1,0 +1,601 @@
+<title>ChronoDim — the whiteboard walkthrough</title>
+<style>
+  :root {
+    --paper: #FAF9F5;
+    --panel: #FFFFFF;
+    --ink: #232936;
+    --ink-soft: #5A6172;
+    --line: #D8D5CC;
+    --blue: #2B5FC7;
+    --blue-soft: #E7EDFA;
+    --green: #1E7D46;
+    --green-soft: #E4F2E9;
+    --orange: #C2621F;
+    --orange-soft: #FAEEDF;
+    --red: #B4372E;
+    --red-soft: #F9E7E5;
+    --note: #FBF3C9;
+    --note-ink: #6B5A14;
+    --hand: "Segoe Print", "Bradley Hand", "Comic Sans MS", "Chalkboard SE", cursive;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --body: system-ui, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #14181F; --panel: #1C222B; --ink: #E9E7E0; --ink-soft: #9BA3B2;
+      --line: #39414E; --blue: #7DA3F2; --blue-soft: #24334F; --green: #6FC493;
+      --green-soft: #1E3529; --orange: #E59A5C; --orange-soft: #3D2C1B;
+      --red: #E2837B; --red-soft: #43241F; --note: #3A3420; --note-ink: #E5D98A;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper: #FAF9F5; --panel: #FFFFFF; --ink: #232936; --ink-soft: #5A6172;
+    --line: #D8D5CC; --blue: #2B5FC7; --blue-soft: #E7EDFA; --green: #1E7D46;
+    --green-soft: #E4F2E9; --orange: #C2621F; --orange-soft: #FAEEDF;
+    --red: #B4372E; --red-soft: #F9E7E5; --note: #FBF3C9; --note-ink: #6B5A14;
+  }
+  :root[data-theme="dark"] {
+    --paper: #14181F; --panel: #1C222B; --ink: #E9E7E0; --ink-soft: #9BA3B2;
+    --line: #39414E; --blue: #7DA3F2; --blue-soft: #24334F; --green: #6FC493;
+    --green-soft: #1E3529; --orange: #E59A5C; --orange-soft: #3D2C1B;
+    --red: #E2837B; --red-soft: #43241F; --note: #3A3420; --note-ink: #E5D98A;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--body); line-height: 1.65; font-size: 16.5px;
+    margin: 0; padding: 0 20px 96px;
+  }
+  main { max-width: 960px; margin: 0 auto; }
+  .prose { max-width: 700px; }
+
+  header { max-width: 700px; padding: 64px 0 8px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--blue); margin: 0 0 14px;
+  }
+  h1 {
+    font-size: clamp(30px, 5vw, 42px); line-height: 1.12; margin: 0 0 14px;
+    letter-spacing: -0.015em; text-wrap: balance; font-weight: 750;
+  }
+  .lede { font-size: 19px; color: var(--ink-soft); margin: 0; text-wrap: pretty; }
+
+  h2 {
+    font-size: 24px; margin: 72px 0 6px; letter-spacing: -0.01em; text-wrap: balance;
+    display: flex; align-items: baseline; gap: 14px; max-width: 700px;
+  }
+  h2 .no {
+    font-family: var(--hand); color: var(--blue); font-size: 21px; flex: none;
+  }
+  h3 { font-size: 17.5px; margin: 34px 0 6px; max-width: 700px; }
+  p, ul, ol { margin: 12px 0; max-width: 700px; }
+  li { margin: 6px 0; }
+  strong { font-weight: 650; }
+  code {
+    font-family: var(--mono); font-size: .86em; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px;
+  }
+  .kicker { color: var(--ink-soft); font-size: 15px; margin-top: 2px; }
+
+  /* whiteboard panels */
+  .board {
+    background: var(--panel); border: 1.5px solid var(--line); border-radius: 10px;
+    margin: 26px 0; padding: 10px 6px; overflow-x: auto;
+  }
+  .board svg { display: block; margin: 0 auto; }
+  .board-caption {
+    font-family: var(--hand); color: var(--ink-soft); font-size: 14.5px;
+    text-align: center; padding: 2px 16px 10px; margin: 0;
+  }
+
+  /* sticky note */
+  .sticky {
+    background: var(--note); color: var(--note-ink);
+    font-family: var(--hand); font-size: 15px; line-height: 1.5;
+    max-width: 330px; padding: 14px 16px; border-radius: 3px;
+    transform: rotate(-1.1deg); margin: 22px 0;
+    box-shadow: 0 2px 6px rgba(0,0,0,.10);
+  }
+  .sticky.tilt-r { transform: rotate(0.9deg); }
+  .sticky b { font-weight: 700; }
+
+  /* step list */
+  ol.steps { counter-reset: st; list-style: none; padding: 0; }
+  ol.steps > li {
+    counter-increment: st; position: relative; padding: 0 0 4px 46px; margin: 14px 0;
+  }
+  ol.steps > li::before {
+    content: counter(st); position: absolute; left: 0; top: 1px;
+    width: 28px; height: 28px; border-radius: 50%;
+    border: 2px solid var(--blue); color: var(--blue);
+    font-family: var(--hand); font-size: 15px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+  }
+  ol.steps b:first-child { color: var(--blue); }
+
+  table {
+    border-collapse: collapse; width: 100%; max-width: 820px; font-size: 14.5px;
+    margin: 18px 0;
+  }
+  th, td { border: 1px solid var(--line); padding: 8px 11px; text-align: left; vertical-align: top; }
+  th { background: var(--panel); font-size: 12.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-soft); }
+  td code { background: transparent; border: none; padding: 0; }
+  .twrap { overflow-x: auto; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 18px; font-size: 14px; color: var(--ink-soft); margin: 16px 0 2px; max-width: 820px; }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .swatch { width: 22px; height: 0; border-top: 3px solid; border-radius: 2px; }
+  .swatch.dash { border-top-style: dashed; }
+
+  footer { margin-top: 90px; color: var(--ink-soft); font-size: 14px; max-width: 700px; border-top: 1px solid var(--line); padding-top: 18px; }
+
+  /* svg text roles */
+  svg text { font-family: var(--body); fill: var(--ink); }
+  svg text.hand { font-family: var(--hand); }
+  svg text.mono { font-family: var(--mono); }
+  svg text.soft { fill: var(--ink-soft); }
+</style>
+
+<main>
+<header>
+  <p class="eyebrow">ChronoDim · internal architecture</p>
+  <h1>The whiteboard walkthrough</h1>
+  <p class="lede">How one adjustment file travels through the engine — every box, every arrow,
+  explained the way you'd draw it for a new teammate. No prior knowledge assumed.</p>
+</header>
+
+<section>
+<h2><span class="no">0.</span> The one idea everything follows from</h2>
+<p class="prose">ChronoDim is a notebook that <strong>never uses an eraser</strong>. When a value
+changes, the old line is not rubbed out — it gets an end date, and a new line is written below it.
+When something is deleted, we write "ended here" instead of tearing out the page. That is the whole
+trick behind SCD Type 2, and every component below exists to do that <em>fast</em>, <em>safely</em>,
+and in a way <strong>Databricks can read</strong>.</p>
+<div class="sticky">Junior tip: whenever a diagram confuses you, come back to this →
+<b>nothing is ever overwritten or erased. Ever.</b> Everything else is bookkeeping.</div>
+</section>
+
+<section>
+<h2><span class="no">1.</span> The big picture — one process, three jobs</h2>
+<p class="prose">There is no server and no external database. The whole engine is <strong>one Java
+process</strong> around <strong>one data folder</strong>. Files go in on the left; three things come
+out on the right.</p>
+
+<div class="board">
+<svg width="920" height="430" viewBox="0 0 920 430" role="img" aria-label="Big picture: input files enter the engine process, which contains reader, SCD2 brain, WAL, hot store, and background publisher and shipper; outputs are query answers, published files for Databricks, and backups.">
+  <defs>
+    <marker id="a1" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M1,1 L8,4.5 L1,8" fill="none" stroke="var(--ink-soft)" stroke-width="1.6" stroke-linecap="round"/>
+    </marker>
+    <marker id="a2" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M1,1 L8,4.5 L1,8" fill="none" stroke="var(--blue)" stroke-width="1.6" stroke-linecap="round"/>
+    </marker>
+    <marker id="a3" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M1,1 L8,4.5 L1,8" fill="none" stroke="var(--orange)" stroke-width="1.6" stroke-linecap="round"/>
+    </marker>
+  </defs>
+
+  <!-- inputs -->
+  <g transform="rotate(-0.4 90 120)">
+    <rect x="18" y="78" width="150" height="86" rx="7" fill="none" stroke="var(--ink-soft)" stroke-width="1.6"/>
+    <text x="93" y="100" text-anchor="middle" class="hand" font-size="14">your files</text>
+    <text x="93" y="122" text-anchor="middle" class="mono" font-size="12">adj.json · .csv</text>
+    <text x="93" y="140" text-anchor="middle" class="mono" font-size="12">.jsonl · envelope</text>
+  </g>
+  <line x1="168" y1="120" x2="238" y2="120" stroke="var(--blue)" stroke-width="2.2" marker-end="url(#a2)" stroke-linecap="round"/>
+
+  <!-- engine box -->
+  <rect x="246" y="22" width="420" height="386" rx="12" fill="none" stroke="var(--ink)" stroke-width="2.2" transform="rotate(0.25 456 215)"/>
+  <text x="268" y="48" class="hand" font-size="16" fill="var(--ink)">the engine — one Java process</text>
+
+  <!-- reader -->
+  <rect x="270" y="66" width="170" height="52" rx="7" fill="var(--blue-soft)" stroke="var(--blue)" stroke-width="1.6"/>
+  <text x="355" y="88" text-anchor="middle" font-size="13.5" font-weight="600">Reader &amp; Checker</text>
+  <text x="355" y="105" text-anchor="middle" class="soft" font-size="11.5">parse · types · quality gates</text>
+
+  <!-- scd2 -->
+  <rect x="270" y="140" width="170" height="52" rx="7" fill="var(--blue-soft)" stroke="var(--blue)" stroke-width="1.6"/>
+  <text x="355" y="162" text-anchor="middle" font-size="13.5" font-weight="600">SCD2 Brain</text>
+  <text x="355" y="179" text-anchor="middle" class="soft" font-size="11.5">insert? new version? no-op?</text>
+
+  <!-- wal -->
+  <rect x="270" y="214" width="170" height="52" rx="7" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.6"/>
+  <text x="355" y="236" text-anchor="middle" font-size="13.5" font-weight="600">WAL (journal)</text>
+  <text x="355" y="253" text-anchor="middle" class="soft" font-size="11.5">write to disk FIRST, always</text>
+
+  <!-- hot store -->
+  <rect x="270" y="288" width="170" height="52" rx="7" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.6"/>
+  <text x="355" y="310" text-anchor="middle" font-size="13.5" font-weight="600">Hot Store (RocksDB)</text>
+  <text x="355" y="327" text-anchor="middle" class="soft" font-size="11.5">fast key-value lookups</text>
+
+  <line x1="355" y1="118" x2="355" y2="136" stroke="var(--blue)" stroke-width="2" marker-end="url(#a2)"/>
+  <line x1="355" y1="192" x2="355" y2="210" stroke="var(--blue)" stroke-width="2" marker-end="url(#a2)"/>
+  <line x1="355" y1="266" x2="355" y2="284" stroke="var(--blue)" stroke-width="2" marker-end="url(#a2)"/>
+
+  <!-- background workers -->
+  <rect x="476" y="140" width="166" height="52" rx="7" fill="var(--orange-soft)" stroke="var(--orange)" stroke-width="1.6" stroke-dasharray="6 4"/>
+  <text x="559" y="162" text-anchor="middle" font-size="13.5" font-weight="600">Publisher</text>
+  <text x="559" y="179" text-anchor="middle" class="soft" font-size="11.5">background · async</text>
+
+  <rect x="476" y="288" width="166" height="52" rx="7" fill="var(--orange-soft)" stroke="var(--orange)" stroke-width="1.6" stroke-dasharray="6 4"/>
+  <text x="559" y="310" text-anchor="middle" font-size="13.5" font-weight="600">Shipper</text>
+  <text x="559" y="327" text-anchor="middle" class="soft" font-size="11.5">copies journal to backup</text>
+
+  <path d="M 440 240 Q 465 240 476 190" fill="none" stroke="var(--orange)" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#a3)"/>
+  <path d="M 440 250 Q 462 260 476 300" fill="none" stroke="var(--orange)" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#a3)"/>
+  <text x="452" y="222" class="hand" font-size="12" fill="var(--orange)">reads the</text>
+  <text x="452" y="237" class="hand" font-size="12" fill="var(--orange)">journal</text>
+
+  <!-- outputs -->
+  <line x1="440" y1="314" x2="440" y2="314" stroke="none"/>
+  <line x1="666" y1="90" x2="736" y2="90" stroke="var(--ink-soft)" stroke-width="2" marker-end="url(#a1)" stroke-linecap="round"/>
+  <line x1="642" y1="166" x2="736" y2="166" stroke="var(--orange)" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#a3)" stroke-linecap="round"/>
+  <line x1="642" y1="314" x2="736" y2="314" stroke="var(--orange)" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#a3)" stroke-linecap="round"/>
+
+  <g transform="rotate(0.5 820 90)">
+    <rect x="744" y="62" width="160" height="58" rx="7" fill="none" stroke="var(--ink-soft)" stroke-width="1.6"/>
+    <text x="824" y="86" text-anchor="middle" font-size="13">query answers</text>
+    <text x="824" y="104" text-anchor="middle" class="soft" font-size="11.5">get · asof · history</text>
+  </g>
+  <g transform="rotate(-0.5 820 168)">
+    <rect x="744" y="138" width="160" height="58" rx="7" fill="none" stroke="var(--ink-soft)" stroke-width="1.6"/>
+    <text x="824" y="160" text-anchor="middle" font-size="13">published files</text>
+    <text x="824" y="178" text-anchor="middle" class="soft" font-size="11.5">__START_AT / __END_AT</text>
+  </g>
+  <g transform="rotate(0.4 820 316)">
+    <rect x="744" y="286" width="160" height="58" rx="7" fill="none" stroke="var(--ink-soft)" stroke-width="1.6"/>
+    <text x="824" y="308" text-anchor="middle" font-size="13">backups</text>
+    <text x="824" y="326" text-anchor="middle" class="soft" font-size="11.5">snapshots + journal copy</text>
+  </g>
+  <text x="800" y="205" class="hand" font-size="12.5" fill="var(--orange)">→ Databricks / Spark / DuckDB</text>
+</svg>
+<p class="board-caption">solid blue = the write path (a caller is waiting) · dashed orange = background work (nobody waits)</p>
+</div>
+
+<div class="legend">
+  <span><i class="swatch" style="border-color: var(--blue)"></i> synchronous — happens before we say "done"</span>
+  <span><i class="swatch dash" style="border-color: var(--orange)"></i> asynchronous — catches up seconds later</span>
+  <span><i class="swatch" style="border-color: var(--green)"></i> durability — survives crashes</span>
+</div>
+</section>
+
+<section>
+<h2><span class="no">2.</span> The write path — follow one file through</h2>
+<p class="prose">Say finance drops <code>adj.json</code> — an envelope with metadata and two records.
+Here is exactly what happens, in order, before the command returns "done":</p>
+
+<ol class="steps prose">
+  <li><b>Read &amp; understand the file.</b> JSON, CSV, or JSONL is parsed. If it's an envelope,
+  the engine pulls out <code>load_id</code>, <code>effective_at</code>, and the metadata. If it has
+  seen this <code>load_id</code> before, it stops right here and returns the original receipt —
+  that's why re-sending a file can never double-apply.</li>
+  <li><b>Check every row.</b> Values are converted to the declared column types, and quality gates
+  run (<code>not_null</code>, ranges…). Bad rows are rejected or quarantined — your choice per table.</li>
+  <li><b>Look up each customer's story so far.</b> For every business key in the batch, the SCD2
+  brain fetches the entity's existing version chain from the hot store.</li>
+  <li><b>Decide, per row.</b> New key → <em>insert</em>. Values changed → <em>close the old version,
+  add a new one</em>. Values identical → <em>no-op, write nothing</em>. Effective date in the past →
+  <em>splice it into history</em>. (Chapter 3 draws this decision.)</li>
+  <li><b>Journal it.</b> Every change from this batch — plus the audit receipt — is written as
+  <strong>one record</strong> in the WAL and physically forced to disk (<code>fsync</code>). This is
+  the moment the batch becomes crash-proof.</li>
+  <li><b>Update the hot store.</b> The same changes are applied to RocksDB so queries see them
+  instantly. All-or-nothing: a reader can never see half a batch.</li>
+  <li><b>Return the receipt.</b> The audit manifest — counts, metadata, journal position — goes back
+  to the caller and is kept forever.</li>
+</ol>
+
+<div class="board">
+<svg width="900" height="240" viewBox="0 0 900 240" role="img" aria-label="Write path pipeline: file to reader to SCD2 brain to WAL fsync to hot store to receipt; the moment of truth is the WAL fsync.">
+  <defs>
+    <marker id="b2" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M1,1 L8,4.5 L1,8" fill="none" stroke="var(--blue)" stroke-width="1.6" stroke-linecap="round"/>
+    </marker>
+  </defs>
+  <g transform="rotate(-0.3 80 120)">
+    <rect x="20" y="92" width="118" height="56" rx="7" fill="none" stroke="var(--ink-soft)" stroke-width="1.6"/>
+    <text x="79" y="115" text-anchor="middle" class="mono" font-size="12.5">adj.json</text>
+    <text x="79" y="133" text-anchor="middle" class="soft" font-size="11.5">2 records</text>
+  </g>
+  <line x1="138" y1="120" x2="176" y2="120" stroke="var(--blue)" stroke-width="2.2" marker-end="url(#b2)"/>
+
+  <rect x="180" y="92" width="128" height="56" rx="7" fill="var(--blue-soft)" stroke="var(--blue)" stroke-width="1.6"/>
+  <text x="244" y="115" text-anchor="middle" font-size="13" font-weight="600">check rows</text>
+  <text x="244" y="133" text-anchor="middle" class="soft" font-size="11.5">types + gates</text>
+  <line x1="308" y1="120" x2="346" y2="120" stroke="var(--blue)" stroke-width="2.2" marker-end="url(#b2)"/>
+
+  <rect x="350" y="92" width="128" height="56" rx="7" fill="var(--blue-soft)" stroke="var(--blue)" stroke-width="1.6"/>
+  <text x="414" y="115" text-anchor="middle" font-size="13" font-weight="600">decide</text>
+  <text x="414" y="133" text-anchor="middle" class="soft" font-size="11.5">SCD2 brain</text>
+  <line x1="478" y1="120" x2="516" y2="120" stroke="var(--blue)" stroke-width="2.2" marker-end="url(#b2)"/>
+
+  <rect x="520" y="92" width="128" height="56" rx="7" fill="var(--green-soft)" stroke="var(--green)" stroke-width="2.2"/>
+  <text x="584" y="115" text-anchor="middle" font-size="13" font-weight="700">journal + fsync</text>
+  <text x="584" y="133" text-anchor="middle" class="soft" font-size="11.5">crash-proof NOW</text>
+  <line x1="648" y1="120" x2="686" y2="120" stroke="var(--blue)" stroke-width="2.2" marker-end="url(#b2)"/>
+
+  <rect x="690" y="92" width="128" height="56" rx="7" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.6"/>
+  <text x="754" y="115" text-anchor="middle" font-size="13" font-weight="600">hot store</text>
+  <text x="754" y="133" text-anchor="middle" class="soft" font-size="11.5">queries see it</text>
+
+  <path d="M 584 88 Q 584 46 560 40" fill="none" stroke="var(--green)" stroke-width="1.6"/>
+  <text x="548" y="34" text-anchor="end" class="hand" font-size="14" fill="var(--green)">★ the moment of truth — after this line,</text>
+  <text x="548" y="52" text-anchor="end" class="hand" font-size="14" fill="var(--green)">a power cut cannot lose this batch</text>
+
+  <path d="M 754 152 Q 754 196 690 202" fill="none" stroke="var(--ink-soft)" stroke-width="1.5"/>
+  <text x="680" y="206" text-anchor="end" class="hand" font-size="14" fill="var(--ink-soft)">receipt (audit manifest) returned + stored forever</text>
+</svg>
+<p class="board-caption">order matters: journal first, hot store second. Never the other way around.</p>
+</div>
+
+<div class="sticky tilt-r"><b>Why journal first?</b> If we updated the hot store first and crashed
+before journaling, the change would exist nowhere durable. Journal-first means the worst crash can
+only lose work we never said "done" for.</div>
+</section>
+
+<section>
+<h2><span class="no">3.</span> The SCD2 brain — one decision per row</h2>
+<p class="prose">Nobody sends us "insert" or "update" commands. Every row is just "here is the truth
+about customer C1". The brain compares it with what's already stored and picks one of five moves:</p>
+
+<div class="board">
+<svg width="880" height="352" viewBox="0 0 880 352" role="img" aria-label="Decision flow: is the key known? did tracked values change? is the effective date older than the latest version? leading to insert, no-op, new version, splice into history, or tombstone.">
+  <defs>
+    <marker id="c1" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M1,1 L8,4.5 L1,8" fill="none" stroke="var(--ink-soft)" stroke-width="1.6" stroke-linecap="round"/>
+    </marker>
+  </defs>
+
+  <g transform="rotate(-0.4 130 60)">
+    <rect x="30" y="30" width="200" height="56" rx="7" fill="var(--blue-soft)" stroke="var(--blue)" stroke-width="1.6"/>
+    <text x="130" y="53" text-anchor="middle" font-size="13.5" font-weight="600">a row arrives</text>
+    <text x="130" y="72" text-anchor="middle" class="soft" font-size="12">C1, risk=120.5, eff. Jun 30</text>
+  </g>
+
+  <line x1="230" y1="58" x2="286" y2="58" stroke="var(--ink-soft)" stroke-width="1.8" marker-end="url(#c1)"/>
+  <rect x="290" y="30" width="168" height="56" rx="28" fill="none" stroke="var(--ink)" stroke-width="1.8"/>
+  <text x="374" y="53" text-anchor="middle" font-size="13">key seen before?</text>
+  <text x="374" y="71" text-anchor="middle" class="soft" font-size="11.5">(keymap lookup)</text>
+
+  <line x1="374" y1="86" x2="374" y2="128" stroke="var(--ink-soft)" stroke-width="1.8" marker-end="url(#c1)"/>
+  <text x="360" y="112" text-anchor="end" class="hand" font-size="13" fill="var(--ink-soft)">no</text>
+  <rect x="288" y="132" width="172" height="46" rx="7" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.6"/>
+  <text x="374" y="160" text-anchor="middle" font-size="13" font-weight="600">INSERT version 1</text>
+
+  <line x1="458" y1="58" x2="530" y2="58" stroke="var(--ink-soft)" stroke-width="1.8" marker-end="url(#c1)"/>
+  <text x="488" y="48" class="hand" font-size="13" fill="var(--ink-soft)">yes</text>
+  <rect x="534" y="30" width="188" height="56" rx="28" fill="none" stroke="var(--ink)" stroke-width="1.8"/>
+  <text x="628" y="53" text-anchor="middle" font-size="13">tracked values changed?</text>
+  <text x="628" y="71" text-anchor="middle" class="soft" font-size="11.5">(hash comparison)</text>
+
+  <line x1="628" y1="86" x2="628" y2="128" stroke="var(--ink-soft)" stroke-width="1.8" marker-end="url(#c1)"/>
+  <text x="614" y="112" text-anchor="end" class="hand" font-size="13" fill="var(--ink-soft)">no</text>
+  <rect x="542" y="132" width="172" height="46" rx="7" fill="none" stroke="var(--ink-soft)" stroke-width="1.6" stroke-dasharray="5 4"/>
+  <text x="628" y="160" text-anchor="middle" font-size="13" font-weight="600" fill="var(--ink-soft)">NO-OP · write nothing</text>
+
+  <line x1="722" y1="58" x2="790" y2="58" stroke="var(--ink-soft)" stroke-width="1.8"/>
+  <path d="M 790 58 Q 806 58 806 78 L 806 190" fill="none" stroke="var(--ink-soft)" stroke-width="1.8" marker-end="url(#c1)"/>
+  <text x="756" y="48" class="hand" font-size="13" fill="var(--ink-soft)">yes</text>
+
+  <rect x="700" y="194" width="172" height="60" rx="28" fill="none" stroke="var(--ink)" stroke-width="1.8"/>
+  <text x="786" y="217" text-anchor="middle" font-size="13">effective date older</text>
+  <text x="786" y="234" text-anchor="middle" font-size="13">than latest version?</text>
+
+  <path d="M 700 224 L 560 224" fill="none" stroke="var(--ink-soft)" stroke-width="1.8" marker-end="url(#c1)"/>
+  <text x="636" y="214" class="hand" font-size="13" fill="var(--ink-soft)">no</text>
+  <rect x="332" y="198" width="224" height="52" rx="7" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.6"/>
+  <text x="444" y="220" text-anchor="middle" font-size="13" font-weight="600">close old version at new date</text>
+  <text x="444" y="238" text-anchor="middle" font-size="13" font-weight="600">+ add new open version</text>
+
+  <path d="M 786 254 L 786 288 L 566 288" fill="none" stroke="var(--ink-soft)" stroke-width="1.8" marker-end="url(#c1)"/>
+  <text x="800" y="276" class="hand" font-size="13" fill="var(--ink-soft)">yes — late arrival!</text>
+  <rect x="332" y="262" width="230" height="52" rx="7" fill="var(--orange-soft)" stroke="var(--orange)" stroke-width="1.6"/>
+  <text x="447" y="284" text-anchor="middle" font-size="13" font-weight="600">SPLICE into history</text>
+  <text x="447" y="302" text-anchor="middle" class="soft" font-size="11.5">neighbours adjusted, nothing lost</text>
+
+  <g transform="rotate(0.6 130 290)">
+    <rect x="30" y="262" width="220" height="52" rx="7" fill="var(--red-soft)" stroke="var(--red)" stroke-width="1.6"/>
+    <text x="140" y="284" text-anchor="middle" font-size="13" font-weight="600">row marked delete / absent</text>
+    <text x="140" y="302" text-anchor="middle" class="soft" font-size="11.5">→ tombstone version, history kept</text>
+  </g>
+</svg>
+<p class="board-caption">five outcomes, one rule: whatever the outcome, existing lines in the notebook are never erased</p>
+</div>
+
+<p class="prose">"Tracked values changed?" is answered with a <strong>hash</strong>: the engine
+fingerprints the columns you listed in <code>tracked_columns</code>. Columns in
+<code>ignored_columns</code> (like feed timestamps) can change all day without creating versions —
+that's what keeps re-sent snapshots free.</p>
+</section>
+
+<section>
+<h2><span class="no">4.</span> How a customer's story is stored</h2>
+<p class="prose">Inside the hot store everything is sorted key→value pairs. Two lookups matter.
+First the <strong>keymap</strong> turns a business key into a compact internal address. Then that
+address is the prefix of the customer's <strong>whole version chain</strong>, newest first:</p>
+
+<div class="board">
+<svg width="900" height="330" viewBox="0 0 900 330" role="img" aria-label="Keymap points to an internal address; that address prefixes the entity's version records, sorted newest first; a timeline shows LOW, MEDIUM, HIGH versions.">
+  <defs>
+    <marker id="d1" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M1,1 L8,4.5 L1,8" fill="none" stroke="var(--blue)" stroke-width="1.6" stroke-linecap="round"/>
+    </marker>
+  </defs>
+
+  <g transform="rotate(-0.5 120 60)">
+    <rect x="26" y="34" width="212" height="54" rx="7" fill="none" stroke="var(--ink-soft)" stroke-width="1.6"/>
+    <text x="132" y="56" text-anchor="middle" class="mono" font-size="12.5">customer_id = "R1"</text>
+    <text x="132" y="76" text-anchor="middle" class="soft" font-size="11.5">what you ask with</text>
+  </g>
+  <line x1="238" y1="60" x2="306" y2="60" stroke="var(--blue)" stroke-width="2" marker-end="url(#d1)"/>
+  <text x="272" y="50" text-anchor="middle" class="hand" font-size="13" fill="var(--blue)">keymap</text>
+
+  <rect x="310" y="34" width="240" height="54" rx="7" fill="var(--blue-soft)" stroke="var(--blue)" stroke-width="1.6"/>
+  <text x="430" y="56" text-anchor="middle" class="mono" font-size="12.5">[table 7 | hash 0x9F3A… | #0]</text>
+  <text x="430" y="76" text-anchor="middle" class="soft" font-size="11.5">the entity's permanent address</text>
+
+  <path d="M 430 88 L 430 122" fill="none" stroke="var(--blue)" stroke-width="2" marker-end="url(#d1)"/>
+  <text x="444" y="110" class="hand" font-size="13" fill="var(--blue)">one prefix scan = the whole story</text>
+
+  <!-- chain records -->
+  <g class="mono" font-size="12">
+    <rect x="120" y="128" width="640" height="34" rx="5" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.4"/>
+    <text x="138" y="150" class="mono">…addr | May 1 | HIGH   | ends: open</text>
+    <text x="742" y="150" text-anchor="end" class="hand" font-size="13" fill="var(--green)">← newest sorts first = current</text>
+
+    <rect x="120" y="168" width="640" height="34" rx="5" fill="none" stroke="var(--line)" stroke-width="1.4"/>
+    <text x="138" y="190" class="mono">…addr | Feb 1 | MEDIUM | ends: May 1</text>
+
+    <rect x="120" y="208" width="640" height="34" rx="5" fill="none" stroke="var(--line)" stroke-width="1.4"/>
+    <text x="138" y="230" class="mono">…addr | Jan 1 | LOW    | ends: Feb 1</text>
+
+    <rect x="120" y="248" width="640" height="34" rx="5" fill="none" stroke="var(--line)" stroke-width="1.4" stroke-dasharray="5 4"/>
+    <text x="138" y="270" class="mono">…addr | Jan 1 | LOW    | ends: open   (older belief)</text>
+    <text x="742" y="270" text-anchor="end" class="hand" font-size="13" fill="var(--ink-soft)">← superseded, kept for audit</text>
+  </g>
+
+  <text x="120" y="312" class="hand" font-size="14" fill="var(--ink-soft)">timeline:  Jan ──LOW──┤ Feb ──MEDIUM──┤ May ──HIGH──────────▶ today</text>
+</svg>
+<p class="board-caption">keys are built so "newest first" is the natural sort order — the top record is always the current one</p>
+</div>
+
+<div class="twrap">
+<table>
+  <tr><th>keyspace</th><th>what it maps</th><th>junior mental model</th></tr>
+  <tr><td><code>DATA</code></td><td>address + dates → the version record</td><td>the notebook pages themselves</td></tr>
+  <tr><td><code>KEYMAP</code></td><td>business key → internal address</td><td>the index at the back of the notebook</td></tr>
+  <tr><td><code>HASHREG</code></td><td>address → full business key</td><td>collision safety net (two keys, same hash)</td></tr>
+  <tr><td><code>MANIFEST</code> / <code>LOADID</code></td><td>every load's receipt, by txn and by load id</td><td>the filing cabinet of receipts</td></tr>
+  <tr><td><code>QUAR</code></td><td>rows that failed checks</td><td>the "needs review" tray</td></tr>
+  <tr><td><code>META</code></td><td>table configs</td><td>the notebook's table of contents</td></tr>
+</table>
+</div>
+</section>
+
+<section>
+<h2><span class="no">5.</span> Reading time back — three questions, one scan</h2>
+<p class="prose">Because the chain is sorted newest-first, all three query types are the same cheap
+walk down one customer's records:</p>
+<ul class="prose">
+  <li><strong>get</strong> ("what is true now?") — take the top record. If it's open and not a
+  tombstone, that's the answer. <em>~21µs measured.</em></li>
+  <li><strong>asof</strong> ("what was true on Feb 15?") — walk down to the first record whose start
+  date ≤ Feb 15; check Feb 15 is before its end date.</li>
+  <li><strong>asof --tx-time</strong> ("what did we <em>believe</em> on Feb 15, back in March?") —
+  same walk, but skip any record the engine learned after March. This is the regulator question,
+  and it works because superseded records are never erased (chapter 4's dashed row).</li>
+</ul>
+<div class="sticky"><b>Two different clocks!</b> "valid time" = when it was true in the business.
+"transaction time" = when the engine found out. A late correction changes the first without
+rewriting the second — that's <b>bitemporal</b>.</div>
+</section>
+
+<section>
+<h2><span class="no">6.</span> When the machine dies — why nothing is lost</h2>
+<p class="prose">The hot store keeps recent writes in memory and flushes to disk occasionally. So
+what happens if the process is killed between a "done" and a flush? The journal saves us:</p>
+
+<div class="board">
+<svg width="900" height="300" viewBox="0 0 900 300" role="img" aria-label="Recovery: the WAL contains transactions 1 to 900; the hot store durably contains up to 850 (the watermark); on restart the engine replays 851 to 900 from the WAL.">
+  <defs>
+    <marker id="e1" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M1,1 L8,4.5 L1,8" fill="none" stroke="var(--green)" stroke-width="1.6" stroke-linecap="round"/>
+    </marker>
+  </defs>
+
+  <text x="30" y="40" class="hand" font-size="15">the journal (WAL) — every change ever, in order, checksummed:</text>
+  <g class="mono" font-size="12">
+    <rect x="30" y="54" width="620" height="36" rx="5" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.5"/>
+    <text x="46" y="77">txn 1 │ txn 2 │ … … … │ txn 850 │ txn 851 │ … │ txn 900</text>
+  </g>
+  <path d="M 508 92 L 508 120" stroke="var(--ink)" stroke-width="1.8" stroke-dasharray="4 4"/>
+  <text x="518" y="114" class="hand" font-size="13.5" fill="var(--ink-soft)">watermark: hot store has safely</text>
+  <text x="518" y="131" class="hand" font-size="13.5" fill="var(--ink-soft)">flushed everything up to txn 850</text>
+
+  <g transform="rotate(-1 140 190)">
+    <rect x="30" y="160" width="240" height="60" rx="7" fill="var(--red-soft)" stroke="var(--red)" stroke-width="1.8"/>
+    <text x="150" y="185" text-anchor="middle" font-size="14" font-weight="700" fill="var(--red)">💥 kill -9 / power cut</text>
+    <text x="150" y="205" text-anchor="middle" class="soft" font-size="12">memory gone: txns 851–900 not flushed</text>
+  </g>
+
+  <path d="M 280 190 L 356 190" stroke="var(--ink-soft)" stroke-width="1.8" marker-end="url(#e1)"/>
+  <rect x="360" y="160" width="250" height="60" rx="7" fill="none" stroke="var(--ink)" stroke-width="1.6"/>
+  <text x="485" y="184" text-anchor="middle" font-size="13.5" font-weight="600">restart: read watermark = 850</text>
+  <text x="485" y="204" text-anchor="middle" class="soft" font-size="12">"what did I already keep safely?"</text>
+
+  <path d="M 610 190 L 686 190" stroke="var(--green)" stroke-width="2" marker-end="url(#e1)"/>
+  <rect x="690" y="160" width="186" height="60" rx="7" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.8"/>
+  <text x="783" y="184" text-anchor="middle" font-size="13.5" font-weight="700">replay 851–900</text>
+  <text x="783" y="204" text-anchor="middle" class="soft" font-size="12">from the journal → all back</text>
+
+  <text x="30" y="268" class="hand" font-size="14" fill="var(--green)">✓ replaying twice is harmless (same keys, same values) — so recovery can never over- or under-apply</text>
+  <text x="30" y="290" class="hand" font-size="14" fill="var(--orange)">the Shipper also copies journal + snapshots to an object store → even losing the whole disk is recoverable</text>
+</svg>
+<p class="board-caption">the journal is the truth; the hot store is a fast cache of it that's allowed to lag</p>
+</div>
+</section>
+
+<section>
+<h2><span class="no">7.</span> The cold tier — what Databricks sees</h2>
+<p class="prose">Seconds after every commit, the Publisher (background, dashed orange) appends the
+new version records to plain files in your team's column template — no engine required to read them:</p>
+
+<div class="board">
+<svg width="880" height="252" viewBox="0 0 880 252" role="img" aria-label="Published folder layout: contract, view SQL, commit log, and Hive-partitioned data files; Spark and DuckDB read them directly.">
+  <g class="mono" font-size="12.5">
+    <text x="40" y="42" class="hand" font-size="15" fill="var(--ink)">export/customer/</text>
+    <text x="70" y="70">_contract.json</text>
+    <text x="330" y="70" class="hand" font-size="13" fill="var(--ink-soft)">← the column template, machine-readable</text>
+    <text x="70" y="96">scd2_view.sql</text>
+    <text x="330" y="96" class="hand" font-size="13" fill="var(--ink-soft)">← paste into Databricks: point-in-time SQL</text>
+    <text x="70" y="122">_chronodim_log/00…01.json</text>
+    <text x="330" y="122" class="hand" font-size="13" fill="var(--ink-soft)">← commit log = exactly-once, never duplicates</text>
+    <text x="70" y="148">data/region=EU/year=2026/part-….jsonl</text>
+    <text x="430" y="148" class="hand" font-size="13" fill="var(--ink-soft)">← Hive partitions, Spark prunes them</text>
+    <text x="70" y="174">finalized/…/current-….jsonl</text>
+    <text x="330" y="174" class="hand" font-size="13" fill="var(--ink-soft)">← materialized "active rows only" snapshot</text>
+  </g>
+  <rect x="30" y="20" width="820" height="170" rx="10" fill="none" stroke="var(--line)" stroke-width="1.6"/>
+  <text x="40" y="222" class="mono" font-size="12.5">row = payload + __START_AT + __END_AT   (END null = ACTIVE · your names, configurable per table)</text>
+  <text x="40" y="244" class="hand" font-size="14" fill="var(--orange)">crash between file and log entry? the orphan file is swept on restart — readers trust the log, so: exactly once.</text>
+</svg>
+<p class="board-caption">the engine is the only writer here; Databricks, Spark and DuckDB are readers with zero migration</p>
+</div>
+</section>
+
+<section>
+<h2><span class="no">8.</span> The code map — where to find each box</h2>
+<div class="twrap">
+<table>
+  <tr><th>module</th><th>owns</th><th>the box in chapter 1</th></tr>
+  <tr><td><code>engine-api</code></td><td>public types: <code>Engine</code>, <code>TableConfig</code>, <code>Version</code>, <code>DataType</code></td><td>the doorway</td></tr>
+  <tr><td><code>engine-cli</code></td><td><code>chronodim</code> commands, file readers, the envelope</td><td>your files → Reader</td></tr>
+  <tr><td><code>engine-core</code></td><td>SCD2 brain (<code>Scd2Applier</code>), WAL, catalog, codecs, <code>EngineImpl</code></td><td>Reader · Brain · Journal</td></tr>
+  <tr><td><code>engine-storage</code></td><td><code>StorageEngine</code> interface + RocksDB backend + pure-Java LSM backend</td><td>Hot Store (swappable!)</td></tr>
+  <tr><td><code>engine-export</code></td><td>Publisher + Finalizer + column templates</td><td>Publisher (orange)</td></tr>
+  <tr><td><code>engine-durability</code></td><td>Shipper, snapshots, restore, WAL pruning</td><td>Shipper (orange)</td></tr>
+  <tr><td><code>engine-testkit</code></td><td>independent reference SCD2 + the 75-test suite</td><td>the proof it's all correct</td></tr>
+  <tr><td><code>engine-bench</code></td><td>the standard performance workload</td><td>the stopwatch</td></tr>
+</table>
+</div>
+
+<h3>Glossary — the six words juniors ask about</h3>
+<div class="twrap">
+<table>
+  <tr><th>word</th><th>plain meaning</th></tr>
+  <tr><td><strong>upsert</strong></td><td>"here's the truth" — the engine decides whether it's new, changed, or nothing</td></tr>
+  <tr><td><strong>WAL / journal</strong></td><td>append-only diary written before anything else; the source of truth in a crash</td></tr>
+  <tr><td><strong>fsync</strong></td><td>forcing the OS to physically put bytes on disk, not just promise to</td></tr>
+  <tr><td><strong>tombstone</strong></td><td>a version that says "ended here" — how we delete without erasing</td></tr>
+  <tr><td><strong>watermark</strong></td><td>"the hot store has safely flushed everything up to txn N" — replay starts after it</td></tr>
+  <tr><td><strong>idempotent</strong></td><td>running the same load twice = running it once (thanks to <code>load_id</code>)</td></tr>
+</table>
+</div>
+</section>
+
+<footer>
+  Companion docs in the repo: <code>docs/formats.md</code> (byte-level contracts) ·
+  <code>docs/walkthrough.md</code> (the Ravi story with real data) · <code>README.md</code> (how to run it).
+</footer>
+</main>
