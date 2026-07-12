@@ -301,10 +301,31 @@ restore through a snapshot to switch).
   torn WAL tails truncate cleanly, interior corruption fails loudly.
 - **Disaster drill** — snapshot + WAL shipping to an object store, full machine
   loss, restore (with optional `--as-of-txn` point-in-time), fingerprint match.
+- **Concurrent load** — 50 threads submitting adjustment batches simultaneously
+  against one engine (heavily contended shared keys, a scanning reader running
+  the whole time): no lost updates, no torn reads, every SCD2 chain contiguous,
+  duplicate `load_id` races resolve to exactly one winner, and a reopen replays
+  to the identical state fingerprint.
 
 ```bash
 mvn test          # runs the whole suite
 ```
+
+### Concurrency model
+
+`Engine.apply()` is safe to call from any number of threads in one process:
+a fair internal mutex serializes the read–decide–write section (so decisions
+are always made against fully committed state), while the fsync wait happens
+*outside* the mutex — concurrent callers share group commits instead of
+queueing behind each other's disk flushes. Reads are snapshot-isolated and
+never block writers. The `load_id` idempotency check runs inside the mutex,
+so two services retrying the same load can never double-apply.
+
+What is **not** supported: two *processes* opening the same data directory.
+The second one fails fast with a lock error (see Non-goals). If many users
+or jobs need to submit adjustments, run one long-lived embedder (service or
+single applier draining an inbox of envelope files) — envelope `load_id`s
+make client retries safe by construction.
 
 ## On-disk formats
 
