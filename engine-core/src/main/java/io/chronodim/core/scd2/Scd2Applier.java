@@ -173,7 +173,14 @@ public final class Scd2Applier {
                     throw new io.chronodim.api.ChronoDimException("interrupted during sharded apply", ie);
                 } catch (java.util.concurrent.ExecutionException ee) {
                     if (ee.getCause() instanceof RuntimeException re) throw re;
-                    throw new io.chronodim.api.ChronoDimException("sharded apply failed", ee.getCause());
+                    // Errors (e.g. OutOfMemoryError on huge wide-row batches) land
+                    // here — name the cause, "sharded apply failed" alone cost a
+                    // debugging session once.
+                    throw new io.chronodim.api.ChronoDimException(
+                            "sharded apply failed: " + ee.getCause()
+                            + (ee.getCause() instanceof OutOfMemoryError
+                               ? " — batch too large for the heap; raise -Xmx or split the file" : ""),
+                            ee.getCause());
                 }
             }
         }

@@ -439,7 +439,8 @@ acceptance targets are defined for 8 physical cores + NVMe, so these are floors:
 | cold read p99 (after restart) | **113–137 µs** | ≤ 5 ms ✅ |
 | **1M adjustments** (CDC mix vs 1M-row table) | **34.6 s = 28.9k applies/s sustained** | ≥ 100k/s on reference hw |
 | **200k adjustments vs a 20M-row table** | **21.2 s = 9.4k applies/s** (4 GB store; deeper index, cold cache) | — |
-| bulk backfill | 64–67k rows/s (20M rows in 5.4 min) | 50M ≤ 5 min (≈167k/s) |
+| **200k × 100-column adjustments** (all real updates, 1M-row table) | **engine 11.4 s = 17.5k applies/s** (8 GB heap; 41 s end-to-end incl. parsing 400 MB of JSON) | — |
+| bulk backfill | 64–67k rows/s (20M rows in 5.4 min); **1M × 100-col (2 GB JSONL) in 69 s, streamed in constant memory** | 50M ≤ 5 min (≈167k/s) |
 
 The write path is sharded and batched (R-PERF-2/3): one `multiGet` resolves all
 business keys per batch, entity chains are read lazily (latest-version-only for
@@ -449,3 +450,11 @@ encoders reuse per-thread buffers. On this 4-vCPU box that took CDC apply from
 so reference hardware lands materially higher. Remaining headroom: Arrow-batch
 scan output and the JMH zero-allocation audit (R-PERF-1/P5). Reproduce with
 `chronodim bench -d <empty-dir> --rows 1000000 --changes 1000000 --json`.
+
+**Memory sizing for wide rows.** `load` streams and runs in constant memory at
+any file size. `apply` holds one atomic batch in memory by design — for wide
+rows give the JVM roughly **4 GB of heap per 100k rows × 100 columns**
+(`java -Xmx8g -jar chronodim.jar apply …` handled 200k × 100 columns; the
+default heap on a 16 GB box did not) or split the file into several load_ids.
+Too small a heap fails cleanly with the cause named, nothing partial is
+committed.
