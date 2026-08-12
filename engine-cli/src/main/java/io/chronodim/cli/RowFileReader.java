@@ -69,6 +69,121 @@ final class RowFileReader {
         }
     }
 
+    /**
+     * Streaming row source for bulk loads: rows are parsed one at a time, never
+     * materialized as a whole file. A 50M-row JSONL backfill runs in constant
+     * memory (the engine's sorted-ingest path spills to disk). JSONL and CSV
+     * only — a JSON array/envelope is one document and has to be read whole,
+     * which is fine for adjustment-sized batches but not for bulk files.
+     */
+    static StreamingRows stream(Path file, String format, String defaultTable) {
+        String fmt = format != null ? format.toLowerCase(Locale.ROOT) : detect(file);
+        return switch (fmt) {
+            case "jsonl", "ndjson" -> new StreamingRows(requireTable(defaultTable), () -> {
+                try {
+                    BufferedReader r = Files.newBufferedReader(file, StandardCharsets.UTF_8);
+                    return new java.util.Iterator<>() {
+                        String next = advance();
+                        long no = 0;
+
+                        private String advance() {
+                            try {
+                                String line;
+                                while ((line = r.readLine()) != null) {
+                                    no++;
+                                    if (!line.isBlank()) return line;
+                                }
+                                r.close();
+                                return null;
+                            } catch (IOException e) {
+                                throw new UncheckedIOException(e);
+                            }
+                        }
+
+                        @Override
+                        public boolean hasNext() {
+                            return next != null;
+                        }
+
+                        @Override
+                        public InputRow next() {
+                            String line = next;
+                            long lineNo = no;
+                            next = advance();
+                            try {
+                                return toRow(Json.parseObject(line));
+                            } catch (ValidationException e) {
+                                throw new ValidationException("line " + lineNo + ": " + e.getMessage());
+                            }
+                        }
+                    };
+                } catch (IOException e) {
+                    throw new UncheckedIOException("cannot read " + file, e);
+                }
+            });
+            case "csv" -> new StreamingRows(requireTable(defaultTable), () -> {
+                try {
+                    BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8);
+                    Csv csv = new Csv(reader);
+                    List<String> header = csv.nextRecord();
+                    if (header == null) throw new ValidationException("CSV input is empty (a header row is required)");
+                    return new java.util.Iterator<>() {
+                        List<String> rec = csv.nextRecord();
+                        long no = 1;
+
+                        @Override
+                        public boolean hasNext() {
+                            if (rec == null) {
+                                try {
+                                    reader.close();
+                                } catch (IOException ignored) {
+                                    // already at EOF; nothing to surface
+                                }
+                                return false;
+                            }
+                            return true;
+                        }
+
+                        @Override
+                        public InputRow next() {
+                            List<String> cur = rec;
+                            no++;
+                            if (cur.size() != header.size()) {
+                                throw new ValidationException("CSV line " + no + ": " + cur.size()
+                                        + " fields, header has " + header.size());
+                            }
+                            rec = csv.nextRecord();
+                            Map<String, Object> m = new LinkedHashMap<>();
+                            for (int i = 0; i < header.size(); i++) {
+                                String cell = cur.get(i);
+                                m.put(header.get(i).strip(), cell.isEmpty() ? null : cell);
+                            }
+                            return toRow(m);
+                        }
+                    };
+                } catch (IOException e) {
+                    throw new UncheckedIOException("cannot read " + file, e);
+                }
+            });
+            // JSON array/envelope: single document, read whole (adjustment-sized only).
+            case "json" -> {
+                ParsedInput in = read(file, fmt, defaultTable);
+                if (in.byTable().size() != 1) throw new ValidationException("load supports a single table");
+                var e = in.byTable().entrySet().iterator().next();
+                yield new StreamingRows(e.getKey(), e.getValue()::iterator, in.loadId(), in.effectiveAt());
+            }
+            default -> throw new ValidationException("unsupported input format '" + fmt
+                    + "' (use json, jsonl or csv, or pass --format)");
+        };
+    }
+
+    /** A single-table row stream plus any envelope metadata (json only). */
+    record StreamingRows(String table, Iterable<InputRow> rows, String loadId, String effectiveAt) {
+        StreamingRows(String table, Iterable<InputRow> rows) {
+            this(table, rows, null, null);
+        }
+    }
+
     /** Same parsing as {@link #read}, from an in-memory body (used by the HTTP UI). */
     static ParsedInput readString(String text, String format, String defaultTable) {
         String fmt = format == null ? "json" : format.toLowerCase(Locale.ROOT);

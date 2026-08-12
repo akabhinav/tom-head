@@ -256,6 +256,16 @@ public final class Main {
             return resolved;
         }
 
+        /** Per-row form of the effective_at default, for streaming paths. */
+        static InputRow shapeOne(TableConfig cfg, InputRow r, Long effectiveAtMicros) {
+            if (effectiveAtMicros == null || r.validFromMicrosOverride() != null) return r;
+            if (cfg.validTimeMode() == TableConfig.ValidTimeMode.SOURCE_COLUMN
+                    && r.values().get(cfg.validTimeColumn()) != null) {
+                return r;
+            }
+            return r.withValidFrom(effectiveAtMicros);
+        }
+
         /** Interval-import (rows already carrying start/end) + envelope effective_at defaults. */
         List<InputRow> shapeRows(Engine e, String table, List<InputRow> rows, String effectiveAt) {
             TableConfig cfg = e.describeTable(table);
@@ -293,12 +303,41 @@ public final class Main {
 
         @Override
         public Integer call() {
-            RowFileReader.ParsedInput in = RowFileReader.read(file, ingest.format, table);
-            if (in.byTable().size() != 1) throw new ValidationException("load supports a single table");
-            String t = in.byTable().keySet().iterator().next();
+            // JSONL/CSV stream row-by-row: a 50M-row bulk file loads in constant
+            // memory (the engine's sorted ingest spills to disk). Only interval-
+            // shaped input (__START_AT/__END_AT) needs the whole file in memory,
+            // because gap detection groups intervals per key.
+            RowFileReader.StreamingRows in = RowFileReader.stream(file, ingest.format, table);
             try (Engine e = opts.open()) {
-                List<InputRow> rows = ingest.shapeRows(e, t, in.byTable().get(t), in.effectiveAt());
-                AuditManifest m = e.backfill(ingest.resolveLoadId(in.loadId()), t, rows);
+                String t = in.table();
+                java.util.Iterator<InputRow> it = in.rows().iterator();
+                InputRow first = it.hasNext() ? it.next() : null;
+                AuditManifest m;
+                if (first != null && io.chronodim.core.scd2.Scd2Import.looksLikeScd2(List.of(first), ingest.scd2Start)) {
+                    RowFileReader.ParsedInput whole = RowFileReader.read(file, ingest.format, table);
+                    List<InputRow> rows = ingest.shapeRows(e, t, whole.byTable().get(t), whole.effectiveAt());
+                    m = e.backfill(ingest.resolveLoadId(whole.loadId()), t, rows);
+                } else {
+                    TableConfig cfg = e.describeTable(t);
+                    Long effMicros = in.effectiveAt() == null ? null : ColumnType.parseTimestampMicros(in.effectiveAt());
+                    InputRow head = first;
+                    Iterable<InputRow> rows = () -> new java.util.Iterator<>() {
+                        InputRow pending = head;
+
+                        @Override
+                        public boolean hasNext() {
+                            return pending != null || it.hasNext();
+                        }
+
+                        @Override
+                        public InputRow next() {
+                            InputRow r = pending != null ? pending : it.next();
+                            pending = null;
+                            return IngestOpts.shapeOne(cfg, r, effMicros);
+                        }
+                    };
+                    m = e.backfill(ingest.resolveLoadId(in.loadId()), t, rows);
+                }
                 opts.out(manifestMap(m));
             }
             return 0;
