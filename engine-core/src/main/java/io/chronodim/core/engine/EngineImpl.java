@@ -199,22 +199,95 @@ public final class EngineImpl implements Engine {
 
     // ---- write path -------------------------------------------------------------------
 
+    private void validateLoadId(String loadId) {
+        if (loadId == null || loadId.isBlank()) throw new ValidationException("a load_id is required");
+        if (!options.numericLoadIds()) return;
+        boolean ok = !loadId.isEmpty() && loadId.length() <= 19
+                && loadId.chars().allMatch(Character::isDigit);
+        if (ok) {
+            try {
+                ok = Long.parseLong(loadId) > 0;
+            } catch (NumberFormatException e) {
+                ok = false;
+            }
+        }
+        if (!ok) {
+            throw new ValidationException("load_id '" + loadId + "' is not numeric — this engine enforces"
+                    + " BIGINT run ids (digits only, 1..9223372036854775807); mint one with"
+                    + " `chronodim run-id` or RunId.next()");
+        }
+    }
+
+    /** Deterministic content hash of a batch (order-sensitive, type-aware). */
+    private static long batchFingerprint(List<ApplyBatch.TableBatch> batches) {
+        long h = 0xcbf29ce484222325L;
+        for (ApplyBatch.TableBatch tb : batches) {
+            h = h * 1099511628211L + tb.table().hashCode();
+            h = h * 31 + (tb.fullSnapshot() ? 1 : 0);
+            for (InputRow r : tb.rows()) {
+                h = h * 1099511628211L + valueHash(r.values());
+                h = h * 31 + (r.delete() ? 1 : 0);
+                h = h * 31 + java.util.Objects.hashCode(r.validFromMicrosOverride());
+            }
+        }
+        return h;
+    }
+
+    /** Content-based hash: byte[] by contents, containers recursively (Map/List hashCode would use element hashes anyway, but byte[] inside them must not fall back to identity). */
+    private static long valueHash(Object v) {
+        return switch (v) {
+            case null -> 0x9E3779B97F4A7C15L;
+            case byte[] b -> java.util.Arrays.hashCode(b) * 0x100000001B3L;
+            case Map<?, ?> m -> {
+                long h = 0xcbf29ce484222325L;
+                for (Map.Entry<?, ?> e : m.entrySet()) {
+                    h = h * 31 + valueHash(e.getKey()) * 131 + valueHash(e.getValue());
+                }
+                yield h;
+            }
+            case List<?> l -> {
+                long h = 1;
+                for (Object o : l) h = h * 131 + valueHash(o);
+                yield h;
+            }
+            default -> v.hashCode();
+        };
+    }
+
     @Override
     public AuditManifest apply(ApplyBatch req) {
         return applyInternal(req.loadId(), req.tables(), req.metadata(), b -> {});
     }
 
+    /** Reserved manifest-metadata key: content fingerprint of the batch (hex). */
+    public static final String BATCH_HASH_KEY = "_batch_hash";
+
     private AuditManifest applyInternal(String loadId, List<ApplyBatch.TableBatch> tableBatches,
                                         Map<String, Object> metadata,
                                         java.util.function.Consumer<AtomicBatch> extraMutations) {
         ensureOpen();
+        validateLoadId(loadId);
         long startNanos = System.nanoTime();
+        // Content fingerprint, computed outside the mutex: lets a duplicate
+        // load_id distinguish "the same batch retried" (fine, idempotent) from
+        // "a different batch under a reused id" (an error, refused loudly).
+        String batchHash = Long.toHexString(batchFingerprint(tableBatches));
+        Map<String, Object> enrichedMeta = new java.util.LinkedHashMap<>(metadata);
+        enrichedMeta.put(BATCH_HASH_KEY, batchHash);
         WalWriter.Appended app;
         AuditManifest manifest;
         applyMutex.lock();
         try {
             AuditManifest prior = findManifestByLoadId(loadId);
-            if (prior != null) return prior;
+            if (prior != null) {
+                Object priorHash = prior.metadata().get(BATCH_HASH_KEY);
+                if (priorHash != null && !priorHash.equals(batchHash)) {
+                    throw new ValidationException("load_id '" + loadId + "' was already used by transaction "
+                            + prior.txnId() + " with DIFFERENT content — run/transaction ids must never be"
+                            + " reused for a different batch; nothing was applied");
+                }
+                return prior;
+            }
 
             long txn = nextTxn;
             long txTime = nextTxTime();
@@ -236,7 +309,7 @@ public final class EngineImpl implements Engine {
             ManifestHolder holder = new ManifestHolder();
             app = wal.append(Wal.TXN_COMMIT, txn, (segment, offset) -> {
                 AuditManifest m = new AuditManifest(loadId, txn, txTime, wallMillis, segment, offset, 0,
-                        false, false, stats, errors.list, metadata);
+                        false, false, stats, errors.list, enrichedMeta);
                 String json = ManifestCodec.toJson(m);
                 batch.put(Codecs.manifestKey(txn), json.getBytes(StandardCharsets.UTF_8));
                 batch.put(Codecs.loadIdKey(loadId), ByteBuffer.allocate(8).putLong(txn).array());
@@ -259,6 +332,7 @@ public final class EngineImpl implements Engine {
     @Override
     public AuditManifest backfill(String loadId, String table, Iterable<InputRow> rows) {
         ensureOpen();
+        validateLoadId(loadId);
         long startNanos = System.nanoTime();
         WalWriter.Appended app;
         AuditManifest manifest;

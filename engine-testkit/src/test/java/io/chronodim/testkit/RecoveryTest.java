@@ -48,10 +48,12 @@ class RecoveryTest {
         ReferenceScd2 ref = new ReferenceScd2(cfg);
         DataGen gen = new DataGen(42, DataGen.StreamOptions.defaults());
 
+        List<InputRow> b3rows = null;
         try (Engine e = ChronoDim.open(dir, opts(backend))) {
             e.createTable(cfg);
             for (int b = 0; b < 10; b++) {
                 List<InputRow> rows = gen.nextBatch(30);
+                if (b == 3) b3rows = rows;
                 AuditManifest m = e.apply(ApplyBatch.single("b" + b, "t", rows));
                 ref.applyBatch(rows, m.startedAtMicros());
             }
@@ -62,8 +64,8 @@ class RecoveryTest {
 
         try (Engine e = ChronoDim.open(dir, opts(backend))) {
             DifferentialTest.compareFullState(e, ref, cfg);
-            // Idempotency map survived too.
-            assertTrue(e.apply(ApplyBatch.single("b3", "t", List.of())).alreadyApplied());
+            // Idempotency map survived too: resending batch 3 verbatim is a no-op.
+            assertTrue(e.apply(ApplyBatch.single("b3", "t", b3rows)).alreadyApplied());
         }
     }
 

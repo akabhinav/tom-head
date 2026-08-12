@@ -129,7 +129,13 @@ chronodim apply changes.csv   -d ./dims -t customer --load-id load-2026-07-12   
 cat stream.jsonl | chronodim apply --stdin -d ./dims -t customer --load-id load-2026-07-13
 
 # rows are upserts; mark deletes with "_op": "delete" (JSON) or an _op column (CSV)
-# re-running the same --load-id is a safe no-op (idempotent)
+# re-running the same --load-id with the SAME batch is a safe no-op (idempotent);
+# reusing a load_id for DIFFERENT content is refused loudly — nothing applies.
+
+# run ids: mint globally unique numeric (BIGINT) ids, time-ordered, ~270 years of space
+chronodim run-id                  # → e.g. 81985529216486895
+chronodim apply changes.json -d ./dims -t customer --load-id "$(chronodim run-id)"
+# enforce numeric-only ids per process: --numeric-load-ids (env CHRONODIM_NUMERIC_LOAD_IDS=true)
 
 # 4. query
 chronodim get     -d ./dims -t customer customer_id=C42

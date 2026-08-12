@@ -108,10 +108,14 @@ class EngineBasicTest {
             assertEquals(1, m3.tables().get(0).noOps());
             assertEquals(3, e.getHistory("customer", Map.of("customer_id", "C1")).size());
 
-            // Idempotency (R-APPLY-3)
+            // Idempotency (R-APPLY-3): identical resend = original receipt back.
             AuditManifest again = e.apply(ApplyBatch.single("load-2", "customer",
-                    List.of(row("C1", "SHOULD NOT APPLY", 999, "2024-06-01T00:00:00Z"))));
+                    List.of(row("C1", "Alice Smith", 120, "2024-02-01T00:00:00Z"))));
             assertTrue(again.alreadyApplied());
+            // Reusing the id for DIFFERENT content is refused loudly (R-APPLY-3b).
+            assertThrows(io.chronodim.api.ValidationException.class,
+                    () -> e.apply(ApplyBatch.single("load-2", "customer",
+                            List.of(row("C1", "SHOULD NOT APPLY", 999, "2024-06-01T00:00:00Z")))));
             assertEquals("Alice Smith", e.getCurrent("customer", Map.of("customer_id", "C1")).orElseThrow().row().get("name"));
 
             // Soft delete

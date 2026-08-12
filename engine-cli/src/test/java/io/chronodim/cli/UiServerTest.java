@@ -144,11 +144,25 @@ class UiServerTest {
         assertEquals(Boolean.FALSE, m.json().get("already_applied"));
         assertEquals(2L, list(m.json().get("tables")).get(0).get("inserts"));
 
-        // Same load_id again → the original receipt, nothing re-applied.
+        // Same load_id + identical batch → the original receipt, nothing re-applied.
+        Res retry = post("/api/tables/account/apply", """
+                {
+                  "load_id": "ui-1",
+                  "metadata": {"approved_by": "ops"},
+                  "records": [
+                    {"id": "A1", "balance": "100.00", "owner": "ada", "tags": ["vip"]},
+                    {"id": "A2", "balance": "55.50",  "owner": "bob"}
+                  ]
+                }
+                """);
+        assertEquals(200, retry.status(), retry.body());
+        assertEquals(Boolean.TRUE, retry.json().get("already_applied"));
+
+        // Same load_id but DIFFERENT content → refused loudly, nothing applied.
         Res dup = post("/api/tables/account/apply",
                 "{\"load_id\": \"ui-1\", \"records\": [{\"id\": \"A1\", \"balance\": \"999\", \"owner\": \"eve\"}]}");
-        assertEquals(200, dup.status());
-        assertEquals(Boolean.TRUE, dup.json().get("already_applied"));
+        assertEquals(400, dup.status(), dup.body());
+        assertTrue(String.valueOf(dup.json().get("error")).contains("DIFFERENT content"));
 
         // An update through the form path (bare array + query-param load id).
         Res upd = post("/api/tables/account/apply?load_id=ui-2",

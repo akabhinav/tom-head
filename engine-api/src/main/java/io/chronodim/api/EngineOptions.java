@@ -17,7 +17,8 @@ public record EngineOptions(
         boolean publishEnabled,
         long publishIntervalMillis,
         String objectStoreUri,
-        long walShipIntervalMillis) {
+        long walShipIntervalMillis,
+        boolean numericLoadIds) {
 
     /**
      * ROCKSDB is the default hot store. LSM is the built-in pure-Java backend
@@ -57,6 +58,7 @@ public record EngineOptions(
         b.publishIntervalMillis = publishIntervalMillis;
         b.objectStoreUri = objectStoreUri;
         b.walShipIntervalMillis = walShipIntervalMillis;
+        b.numericLoadIds = numericLoadIds;
         return b;
     }
 
@@ -74,6 +76,7 @@ public record EngineOptions(
         private long publishIntervalMillis = 1_000;
         private String objectStoreUri;
         private long walShipIntervalMillis = 5_000;
+        private boolean numericLoadIds = false;
 
         public Builder storageBackend(StorageBackend v) { storageBackend = v; return this; }
         public Builder walSegmentBytes(long v) { walSegmentBytes = v; return this; }
@@ -89,11 +92,13 @@ public record EngineOptions(
         public Builder publishIntervalMillis(long v) { publishIntervalMillis = v; return this; }
         public Builder objectStoreUri(String v) { objectStoreUri = v; return this; }
         public Builder walShipIntervalMillis(long v) { walShipIntervalMillis = v; return this; }
+        /** Enforce numeric (BIGINT-range) load ids: digits only, 0 < id <= Long.MAX_VALUE. */
+        public Builder numericLoadIds(boolean v) { numericLoadIds = v; return this; }
 
         public EngineOptions build() {
             return new EngineOptions(storageBackend, walSegmentBytes, groupCommitWindowMicros, groupCommitMaxTxns,
                     memtableFlushBytes, blockCacheBytes, maxSegmentsBeforeCompaction, maxManifestErrors, fsync,
-                    publishEnabled, publishIntervalMillis, objectStoreUri, walShipIntervalMillis);
+                    publishEnabled, publishIntervalMillis, objectStoreUri, walShipIntervalMillis, numericLoadIds);
         }
     }
 }

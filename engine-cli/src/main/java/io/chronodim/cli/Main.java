@@ -52,7 +52,7 @@ import java.util.concurrent.Callable;
                 Main.ExportStatus.class, Main.FinalizeCmd.class,
                 Main.Snapshot.class, Main.WalPrune.class, Main.Restore.class, Main.Verify.class,
                 Main.Manifest.class, Main.Quarantine.class, Main.Stats.class, Main.Bench.class,
-                Main.Ui.class,
+                Main.Ui.class, Main.RunIdCmd.class,
         })
 public final class Main {
 
@@ -88,12 +88,17 @@ public final class Main {
         @Option(names = "--no-fsync", hidden = true, description = "Testing only: forfeit durability")
         boolean noFsync;
 
+        @Option(names = "--numeric-load-ids", defaultValue = "${CHRONODIM_NUMERIC_LOAD_IDS:-false}",
+                description = "Enforce numeric BIGINT load ids (digits only; mint with `chronodim run-id`). Env: CHRONODIM_NUMERIC_LOAD_IDS")
+        boolean numericLoadIds;
+
         EngineOptions options() {
             return EngineOptions.builder()
                     .storageBackend(EngineOptions.StorageBackend.valueOf(storage.toUpperCase(java.util.Locale.ROOT)))
                     .publishEnabled(!noPublish)
                     .objectStoreUri(objectStore)
                     .fsync(!noFsync)
+                    .numericLoadIds(numericLoadIds)
                     .build();
         }
 
@@ -758,6 +763,18 @@ public final class Main {
                         + "   (data: " + opts.dataDir + ", Ctrl-C to stop)");
                 Thread.currentThread().join(); // serve until interrupted
             }
+            return 0;
+        }
+    }
+
+    @Command(name = "run-id", description = "Mint globally unique numeric (BIGINT) run ids — time-ordered, unique for ~270 years, safe as load_id.")
+    static class RunIdCmd implements Callable<Integer> {
+        @Option(names = {"-n", "--count"}, defaultValue = "1", description = "How many ids to mint (default 1)")
+        int count;
+
+        @Override
+        public Integer call() {
+            for (int i = 0; i < count; i++) System.out.println(io.chronodim.api.RunId.next());
             return 0;
         }
     }

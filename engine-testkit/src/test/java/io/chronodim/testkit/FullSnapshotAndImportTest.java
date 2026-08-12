@@ -141,7 +141,10 @@ class FullSnapshotAndImportTest {
             e.createTable(cfg);
             DataGen gen = new DataGen(3, DataGen.StreamOptions.defaults());
             e.apply(new ApplyBatch("meta-1", List.of(new ApplyBatch.TableBatch("t", gen.nextBatch(5))), meta));
-            assertEquals(meta, e.manifest("meta-1").orElseThrow().metadata());
+            // The engine adds reserved keys (e.g. _batch_hash); user metadata survives verbatim.
+            Map<String, Object> stored = new java.util.LinkedHashMap<>(e.manifest("meta-1").orElseThrow().metadata());
+            stored.keySet().removeIf(k -> k.startsWith("_"));
+            assertEquals(meta, stored);
         }
         // Survives restart (it is part of the durable manifest).
         try (Engine e = ChronoDim.open(root.resolve("db3"), opts())) {
