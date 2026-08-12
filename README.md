@@ -438,7 +438,8 @@ acceptance targets are defined for 8 physical cores + NVMe, so these are floors:
 | warm point read p50 / p99 | **21–30 µs / ~100 µs** | ≤ 50 µs / ≤ 1 ms ✅ |
 | cold read p99 (after restart) | **113–137 µs** | ≤ 5 ms ✅ |
 | **1M adjustments** (CDC mix vs 1M-row table) | **34.6 s = 28.9k applies/s sustained** | ≥ 100k/s on reference hw |
-| bulk backfill | 64–67k rows/s | 50M ≤ 5 min (≈167k/s) |
+| **200k adjustments vs a 20M-row table** | **21.2 s = 9.4k applies/s** (4 GB store; deeper index, cold cache) | — |
+| bulk backfill | 64–67k rows/s (20M rows in 5.4 min) | 50M ≤ 5 min (≈167k/s) |
 
 The write path is sharded and batched (R-PERF-2/3): one `multiGet` resolves all
 business keys per batch, entity chains are read lazily (latest-version-only for
