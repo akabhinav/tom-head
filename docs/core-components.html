@@ -1,0 +1,164 @@
+<!doctype html>
+<title>ChronoDim Core Components</title>
+<style>
+:root{--paper:#F6F8F5;--card:#FFFFFF;--ink:#1D2722;--muted:#5E6D63;--line:#D9E1D8;
+--acc:#1D6B4F;--accS:#E3EFE8;--amber:#A8721C;--amberS:#F8EFDD;--chip:#EFF4EE}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+--paper:#121815;--card:#1A231F;--ink:#DCE6DF;--muted:#8FA398;--line:#2B372F;
+--acc:#59BA92;--accS:#1E3A2E;--amber:#D9A44A;--amberS:#3A2F1B;--chip:#212C26}}
+:root[data-theme="dark"]{--paper:#121815;--card:#1A231F;--ink:#DCE6DF;--muted:#8FA398;
+--line:#2B372F;--acc:#59BA92;--accS:#1E3A2E;--amber:#D9A44A;--amberS:#3A2F1B;--chip:#212C26}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);
+font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:880px;margin:0 auto;padding:44px 20px 90px}
+h1{font-size:36px;margin:0;letter-spacing:-.6px}
+.sub{color:var(--muted);margin:6px 0 34px;max-width:64ch}
+.plate{background:var(--card);border:1px solid var(--line);border-radius:14px;
+padding:24px 26px 26px;margin:0 0 26px;box-shadow:0 1px 3px rgba(20,40,30,.05)}
+.head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:2px}
+.num{font:700 13px/1 ui-monospace,Menlo,monospace;color:var(--acc);
+border:1.5px solid var(--acc);border-radius:6px;padding:5px 8px}
+h2{font-size:20px;margin:0}
+.role{color:var(--muted);font-size:14.5px;margin:6px 0 14px;max-width:70ch}
+.algos{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 18px}
+.algo{font:12px/1 ui-monospace,Menlo,monospace;background:var(--chip);
+border:1px solid var(--line);border-radius:6px;padding:6px 9px;color:var(--ink)}
+.algo b{color:var(--acc);font-weight:700}
+.flow{display:flex;flex-direction:column;align-items:center;gap:0}
+.n{border:1.5px solid var(--line);background:var(--paper);border-radius:10px;
+padding:10px 16px;text-align:center;min-width:230px;max-width:560px;font-size:14.5px}
+.n small{display:block;color:var(--muted);font-size:12.5px;margin-top:2px}
+.n.g{border-color:var(--acc);background:var(--accS)}
+.n.a{border-color:var(--amber);background:var(--amberS)}
+.d{color:var(--acc);font-size:15px;line-height:1;padding:7px 0}
+.split{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+width:100%;margin:6px 0}
+.split .col{display:flex;flex-direction:column;align-items:center}
+.lbl{font:11px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;
+color:var(--muted);padding:0 0 7px}
+.overflow{overflow-x:auto}
+@media(max-width:560px){.n{min-width:0;width:100%}}
+</style>
+<div class="wrap">
+<h1>Core Components</h1>
+<p class="sub">Each plate: what the component does, the algorithms inside it, and the flow through it.
+Green boxes are the decisions and guarantees; amber boxes are the safety rails.</p>
+
+<div class="plate"><div class="head"><span class="num">01</span><h2>EngineImpl — the transaction pipeline</h2></div>
+<p class="role">Turns any batch — even one spanning several tables — into exactly one atomic, durable, idempotent transaction.</p>
+<div class="algos"><span class="algo"><b>FNV-1a</b> batch content fingerprint</span>
+<span class="algo"><b>fair ReentrantLock</b> starvation-free ordering</span>
+<span class="algo"><b>max(WAL, watermark)+1</b> txn-id crash recovery</span></div>
+<div class="flow">
+<div class="n">apply(batch)<small>fingerprint computed outside the lock</small></div><div class="d">▼</div>
+<div class="n a">load_id seen before?<small>same content → original receipt · different content → refused, nothing applied</small></div><div class="d">▼</div>
+<div class="n g">txn = nextTxn<small>strictly monotonic BIGINT, survives any crash</small></div><div class="d">▼</div>
+<div class="n g">Scd2Applier decides every row of every table</div><div class="d">▼</div>
+<div class="n g">ONE WAL record = all changes + audit manifest<small>cross-table atomicity lives here</small></div><div class="d">▼</div>
+<div class="n">fsync awaited outside the lock<small>concurrent users share one group commit</small></div>
+</div></div>
+
+<div class="plate"><div class="head"><span class="num">02</span><h2>Scd2Applier — the decision engine</h2></div>
+<p class="role">Classifies each row: new entity, changed, unchanged, deleted, or back-dated. Cost follows the batch, never the table.</p>
+<div class="algos"><span class="algo"><b>bulk multiGet</b> one lookup for 100k keys</span>
+<span class="algo"><b>xxHash64</b> change detection</span>
+<span class="algo"><b>hash-sharded fan-out</b> across all cores &gt;2048 entities</span>
+<span class="algo"><b>lazy chain read</b> newest record only</span></div>
+<div class="flow">
+<div class="n">resolve entity by business key</div><div class="d">▼</div>
+<div class="split">
+<div class="col"><div class="lbl">key unknown</div><div class="n g">INSERT<small>open interval</small></div></div>
+<div class="col"><div class="lbl">_op delete</div><div class="n a">TOMBSTONE<small>close, keep history</small></div></div>
+<div class="col"><div class="lbl">hash equal</div><div class="n g">NO-OP<small>write nothing</small></div></div>
+<div class="col"><div class="lbl">newer value</div><div class="n g">UPDATE<small>close old + open new</small></div></div>
+<div class="col"><div class="lbl">back-dated</div><div class="n a">LATE<small>split / reject / quarantine</small></div></div>
+</div></div></div>
+
+<div class="plate"><div class="head"><span class="num">03</span><h2>Codecs — bytes on disk</h2></div>
+<p class="role">Frozen record formats. Every version of an entity is one key-value pair whose key sorts newest-first.</p>
+<div class="algos"><span class="algo"><b>~(x ^ MIN_VALUE)</b> order-flipping encode: newest sorts first</span>
+<span class="algo"><b>xxHash64</b> attrHash over tracked columns</span>
+<span class="algo"><b>length-prefixed</b> recursive type encoding</span></div>
+<div class="flow">
+<div class="n">KEY&nbsp;&nbsp;<small>0x01 · tableId · keyHash · key bytes · desc(validFrom) · desc(txTime)</small></div><div class="d">▼</div>
+<div class="n g">newest version = FIRST record under the key<small>current-state read is one seek at any history depth</small></div><div class="d">▼</div>
+<div class="n">VALUE&nbsp;&nbsp;<small>op · validTo · txTime · txnId · schemaVer · attrHash · payload</small></div>
+</div></div>
+
+<div class="plate"><div class="head"><span class="num">04</span><h2>WAL — the write-ahead log</h2></div>
+<p class="role">The database <i>is</i> this log; the hot store is a rebuildable cache of it.</p>
+<div class="algos"><span class="algo"><b>CRC32C</b> per-frame integrity</span>
+<span class="algo"><b>group commit</b> 2 ms / 512-txn window, one fsync</span>
+<span class="algo"><b>tail-truncate</b> recovery; interior corruption fails loudly</span></div>
+<div class="flow">
+<div class="n">users A + B + C commit concurrently</div><div class="d">▼</div>
+<div class="n g">one fsync covers all three transactions</div><div class="d">▼</div>
+<div class="n a">crash replay: torn tail trimmed · mid-log corruption = loud stop<small>nothing is acknowledged before its bytes are durable</small></div>
+</div></div>
+
+<div class="plate"><div class="head"><span class="num">05</span><h2>StorageEngine — two backends, one contract</h2></div>
+<div class="algos"><span class="algo"><b>LSM tree</b> memtable → sorted segments → compaction</span>
+<span class="algo"><b>bloom filters</b> skip absent keys</span>
+<span class="algo"><b>k-way merge</b> compaction &amp; scans</span>
+<span class="algo"><b>binary search</b> inside segments</span></div>
+<div class="flow">
+<div class="split">
+<div class="col"><div class="lbl">default</div><div class="n">RocksDB<small>native speed · durable-txn watermark</small></div></div>
+<div class="col"><div class="lbl">escape hatch</div><div class="n">Pure-Java LSM<small>zero native dependencies</small></div></div>
+</div><div class="d">▼</div>
+<div class="n g">same contract test · same differential proofs<small>switching backends can never change an answer</small></div>
+</div></div>
+
+<div class="plate"><div class="head"><span class="num">06</span><h2>Catalog — schemas that remember</h2></div>
+<div class="algos"><span class="algo"><b>schema history</b> every version retained</span>
+<span class="algo"><b>read-time up-convert</b> old rows gain new nullable columns as null</span></div>
+<div class="flow">
+<div class="n">alter: add nullable column → schema v2</div><div class="d">▼</div>
+<div class="n g">rows written under v1 are never rewritten<small>conversion happens on read, from history</small></div><div class="d">▼</div>
+<div class="n a">business-key or type changes: refused forever</div>
+</div></div>
+
+<div class="plate"><div class="head"><span class="num">07</span><h2>Publisher — exactly-once feed to Databricks</h2></div>
+<div class="algos"><span class="algo"><b>atomic rename</b> tmp → final, never a half file</span>
+<span class="algo"><b>monotonic commit log</b> _chronodim_log = exactly-once bookmark</span>
+<span class="algo"><b>ROW_NUMBER() window</b> the generated SCD2 view</span></div>
+<div class="flow">
+<div class="n">committed WAL range → rows in your column style<small>__START_AT / __END_AT · END null = active</small></div><div class="d">▼</div>
+<div class="n g">immutable part-⟨txnFrom⟩-⟨txnTo⟩.jsonl + log entry</div><div class="d">▼</div>
+<div class="n g">Databricks: APPEND ONLY — never MERGE</div><div class="d">▼</div>
+<div class="n a">crash mid-publish → same range re-renders byte-identical</div>
+</div></div>
+
+<div class="plate"><div class="head"><span class="num">08</span><h2>Durability — backups that survive the machine</h2></div>
+<div class="algos"><span class="algo"><b>chunked shipping</b> even the active WAL segment</span>
+<span class="algo"><b>xxHash64 checksums</b> on snapshot files</span>
+<span class="algo"><b>veto-based pruning</b> shipper + publisher must both release</span></div>
+<div class="flow">
+<div class="n">engine ships WAL every few seconds · snapshots on schedule</div><div class="d">▼</div>
+<div class="n a">disaster: whole data directory deleted</div><div class="d">▼</div>
+<div class="n g">restore = newest snapshot + WAL replay (--as-of-txn optional)<small>state fingerprint comes back IDENTICAL</small></div>
+</div></div>
+
+<div class="plate"><div class="head"><span class="num">09</span><h2>Front doors — CLI, console, RunId</h2></div>
+<div class="algos"><span class="algo"><b>snowflake ids</b> 43-bit ms + 8 node + 12 sequence = unique BIGINTs ~270 yrs</span>
+<span class="algo"><b>streaming ingest</b> bulk loads in constant memory</span>
+<span class="algo"><b>external merge sort</b> backfill fast path</span></div>
+<div class="flow">
+<div class="split">
+<div class="col"><div class="lbl">automation</div><div class="n">CLI<small>load · apply · asof · restore · run-id</small></div></div>
+<div class="col"><div class="lbl">people</div><div class="n">UI console<small>browse · time travel · adjust · audit</small></div></div>
+</div><div class="d">▼</div>
+<div class="n g">one Engine API — no privileged shortcut<small>one process holds the folder lock; everyone works through it</small></div>
+</div></div>
+
+<div class="plate"><div class="head"><span class="num">10</span><h2>Testkit — how correctness is proven</h2></div>
+<div class="algos"><span class="algo"><b>differential testing</b> vs a deliberately naive reference</span>
+<span class="algo"><b>randomized scenarios</b> seeded, reproducible</span>
+<span class="algo"><b>commutative hash</b> order-independent state fingerprint</span></div>
+<div class="flow">
+<div class="n">same random batches → ChronoDim and ReferenceScd2</div><div class="d">▼</div>
+<div class="n g">FULL STATE EQUAL? every row · every version · both time axes</div><div class="d">▼</div>
+<div class="n">94 tests · 600-scenario soak · 58M-row drill · every commit<small>every clever optimization must match code with no cleverness in it</small></div>
+</div></div>
+</div>
