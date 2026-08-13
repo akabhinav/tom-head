@@ -1,0 +1,242 @@
+<!doctype html>
+<title>ChronoDim Component Atlas</title>
+<style>
+:root{--paper:#F7F8F5;--card:#FFFFFF;--ink:#1E2823;--muted:#5E6D63;--line:#DCE3DA;--acc:#1D6B4F;--amber:#A8721C}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+--paper:#141A17;--card:#1B2420;--ink:#D9E3DC;--muted:#8FA398;--line:#2A362F;--acc:#54B48C;--amber:#D9A44A}}
+:root[data-theme="dark"]{--paper:#141A17;--card:#1B2420;--ink:#D9E3DC;--muted:#8FA398;--line:#2A362F;--acc:#54B48C;--amber:#D9A44A}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:940px;margin:0 auto;padding:40px 20px 80px}
+h1{font-size:34px;margin:0 0 4px;letter-spacing:-.5px}
+.sub{color:var(--muted);margin:0 0 30px;max-width:66ch}
+section{margin:0 0 48px;border-top:1px solid var(--line);padding-top:24px}
+.eyebrow{font:11px/1 ui-monospace,Menlo,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--acc);margin:0 0 6px}
+h2{font-size:21px;margin:0 0 4px}
+.role{color:var(--muted);margin:0 0 16px;max-width:70ch}
+.dg{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;overflow-x:auto}
+.note{border-left:3px solid var(--amber);padding:8px 14px;margin-top:12px;font-size:14.5px;background:var(--card);border-radius:0 8px 8px 0}
+.note b{color:var(--amber)}
+</style>
+<div class="wrap">
+<h1>ChronoDim Component Atlas</h1>
+<p class="sub">One diagram per core component, in the order an adjustment travels.
+Green = the happy path. Amber = the safety rails. Read any single diagram alone — each stands on its own.</p>
+
+<section>
+<p class="eyebrow">01 · the whole engine</p><h2>Where everything sits</h2>
+<div class="dg"><pre class="mermaid">
+flowchart TB
+ U["User: JSON / CSV / UI form / Java call"] --> CLI["CLI + UiServer<br/><i>parse, no business logic</i>"]
+ CLI --> API["Engine API<br/><i>the public contract</i>"]
+ API --> E["EngineImpl<br/><i>one atomic transaction</i>"]
+ E --> CAT["Catalog<br/><i>schemas + policies</i>"]
+ E --> APP["Scd2Applier<br/><i>decides every row</i>"]
+ APP --> COD["Codecs<br/><i>rows → bytes</i>"]
+ E --> WAL["WAL<br/><i>durable first</i>"]
+ COD --> ST["StorageEngine<br/>RocksDB / pure-Java LSM"]
+ WAL --> ST
+ ST --> PUB["Publisher<br/><i>cold files → Databricks</i>"]
+ WAL --> SHIP["WAL Shipper<br/><i>object-store backup</i>"]
+ classDef g fill:#1D6B4F,stroke:#1D6B4F,color:#fff
+ classDef n fill:#eef3ee,stroke:#9ab3a4,color:#1E2823
+ class E,APP g
+ class U,CLI,API,CAT,COD,WAL,ST,PUB,SHIP n
+</pre></div>
+</section>
+
+<section>
+<p class="eyebrow">02 · EngineImpl</p><h2>The transaction pipeline</h2>
+<p class="role">Every batch — even one spanning several tables — becomes exactly one all-or-nothing transaction.</p>
+<div class="dg"><pre class="mermaid">
+flowchart TB
+ A["apply(batch)"] --> FP["fingerprint batch content<br/><i>outside the lock</i>"]
+ FP --> L{{"fair mutex — one batch decides at a time"}}
+ L --> D{"load_id seen<br/>before?"}
+ D -- "never" --> T["txn = nextTxn<br/><i>monotonic, crash-recovered</i>"]
+ D -- "same content" --> R1["return ORIGINAL receipt<br/>apply nothing (safe retry)"]
+ D -- "different content" --> R2["REFUSE loudly<br/>apply nothing"]
+ T --> P["Scd2Applier per table"]
+ P --> W["ONE WAL record:<br/>all mutations + audit manifest"]
+ W --> S["write hot store · nextTxn++"]
+ S --> F["wait for fsync OUTSIDE mutex<br/><i>callers share one group commit</i>"]
+ F --> M["receipt: manifest with exact counts"]
+ classDef g fill:#1D6B4F,stroke:#1D6B4F,color:#fff
+ classDef w fill:#fff7e8,stroke:#A8721C,color:#5a3d0e
+ class T,P,W,S,F,M g
+ class D,R1,R2,L,FP w
+</pre></div>
+<div class="note"><b>Safety rail:</b> reuse of a run id with different data can never land — checked inside the lock, so even racing threads get exactly one winner.</div>
+</section>
+
+<section>
+<p class="eyebrow">03 · Scd2Applier</p><h2>The five-way decision, per row</h2>
+<div class="dg"><pre class="mermaid">
+flowchart TB
+ R["row arrives"] --> G["resolve entity by business key<br/><i>one bulk multiGet for the whole batch</i>"]
+ G --> K{"key exists?"}
+ K -- no --> I["INSERT<br/>new entity, open interval"]
+ K -- yes --> A["read newest record only<br/><i>1 seek — history untouched</i>"]
+ A --> DEL{"_op = delete?"}
+ DEL -- yes --> X["TOMBSTONE<br/>close active interval, keep history"]
+ DEL -- no --> H{"attrHash equal?"}
+ H -- yes --> N["NO-OP<br/>write nothing — resends are free"]
+ H -- no --> W{"effective time vs<br/>current interval start"}
+ W -- "newer or equal" --> U["UPDATE<br/>close old at eff, open new at eff"]
+ W -- "older (back-dated)" --> LT["LATE ARRIVAL<br/>policy: split / reject / quarantine"]
+ classDef g fill:#1D6B4F,stroke:#1D6B4F,color:#fff
+ classDef w fill:#fff7e8,stroke:#A8721C,color:#5a3d0e
+ classDef n fill:#eef3ee,stroke:#9ab3a4,color:#1E2823
+ class I,U,N g
+ class X,LT w
+ class R,G,A n
+</pre></div>
+<div class="note"><b>Why it's fast:</b> cost follows the 100k-row batch, never the 30M-row table — lookups jump straight to each key.</div>
+</section>
+
+<section>
+<p class="eyebrow">04 · Codecs</p><h2>One version record on disk</h2>
+<div class="dg"><pre class="mermaid">
+flowchart LR
+ subgraph KEY["KEY — sorts newest-first"]
+  k1["0x01<br/>DATA"] --> k2["tableId"] --> k3["keyHash"] --> k4["business<br/>key bytes"] --> k5["desc(validFrom)"] --> k6["desc(txTime)"]
+ end
+ subgraph VAL["VALUE"]
+  v1["op"] --> v2["validTo"] --> v3["txTime"] --> v4["txnId"] --> v5["schemaVer"] --> v6["attrHash<br/><i>no-op detector</i>"] --> v7["payload<br/>all columns"]
+ end
+ KEY -.-> VAL
+ classDef n fill:#eef3ee,stroke:#9ab3a4,color:#1E2823
+ classDef g fill:#1D6B4F,stroke:#1D6B4F,color:#fff
+ class k1,k2,k3,k4,v1,v2,v3,v4,v5,v7 n
+ class k5,k6,v6 g
+</pre></div>
+<div class="note"><b>The trick:</b> <code>desc(x)</code> flips the sort so the newest version is the <i>first</i> record under each key — a current-state read is one seek, no matter how deep the history.</div>
+</section>
+
+<section>
+<p class="eyebrow">05 · WAL</p><h2>Group commit — how 50 users share one disk flush</h2>
+<div class="dg"><pre class="mermaid">
+sequenceDiagram
+ participant U1 as user A
+ participant U2 as user B
+ participant U3 as user C
+ participant W as WAL writer
+ participant D as disk
+ U1->>W: txn 41 appended
+ U2->>W: txn 42 appended
+ U3->>W: txn 43 appended
+ Note over W: collect up to 2 ms / 512 txns
+ W->>D: ONE fsync covers 41+42+43
+ D-->>W: durable
+ W-->>U1: acknowledged
+ W-->>U2: acknowledged
+ W-->>U3: acknowledged
+</pre></div>
+<div class="note"><b>Recovery contract:</b> torn tail after a crash → truncated cleanly; corruption in the middle → fail loudly, never skip. Nothing is ever acknowledged before its bytes are durable.</div>
+</section>
+
+<section>
+<p class="eyebrow">06 · Storage</p><h2>Two backends, one contract</h2>
+<div class="dg"><pre class="mermaid">
+flowchart TB
+ SPI["StorageEngine SPI<br/>get · multiGet · write · scan · snapshot"]
+ SPI --> R["RocksDB (default)<br/>native speed<br/>durable-txn watermark"]
+ SPI --> L["Pure-Java LSM<br/>memtable → segments → bloom<br/>zero native dependencies"]
+ R --> CT["same contract test<br/>same differential proofs"]
+ L --> CT
+ classDef g fill:#1D6B4F,stroke:#1D6B4F,color:#fff
+ classDef n fill:#eef3ee,stroke:#9ab3a4,color:#1E2823
+ class SPI,CT g
+ class R,L n
+</pre></div>
+<div class="note"><b>Guarantee:</b> switching backends can never change an answer — both must equal the reference implementation on every test.</div>
+</section>
+
+<section>
+<p class="eyebrow">07 · Catalog</p><h2>Schema evolution without rewrites</h2>
+<div class="dg"><pre class="mermaid">
+flowchart LR
+ V1["schema v1<br/>id, name, amt"] -- "alter: add nullable 'tier'" --> V2["schema v2<br/>id, name, amt, tier"]
+ OLD["row written under v1"] -- "read today" --> UP["up-convert at read:<br/>tier = null"]
+ V2 -.-> UP
+ BAD["change key / change type"] -- refused --> STOP(("✕"))
+ classDef g fill:#1D6B4F,stroke:#1D6B4F,color:#fff
+ classDef w fill:#fff7e8,stroke:#A8721C,color:#5a3d0e
+ classDef n fill:#eef3ee,stroke:#9ab3a4,color:#1E2823
+ class V1,V2,OLD,UP n
+ class BAD,STOP w
+</pre></div>
+</section>
+
+<section>
+<p class="eyebrow">08 · Publisher</p><h2>Exactly-once feed to Databricks</h2>
+<div class="dg"><pre class="mermaid">
+flowchart TB
+ WAL2["WAL (committed txns)"] --> RD["render rows in your style<br/>__START_AT / __END_AT, END null = active"]
+ RD --> TMP["write part-file.tmp"] --> MV["ATOMIC move →<br/>part-&lt;txnFrom&gt;-&lt;txnTo&gt;.jsonl<br/><i>immutable, unique name</i>"]
+ MV --> LOG["_chronodim_log entry<br/><i>the exactly-once bookmark</i>"]
+ LOG --> DBX["Databricks Auto Loader<br/><b>append only — never MERGE</b>"]
+ CR["crash / restart?"] -.-> RD
+ CR -.-> BI["same txn range → byte-identical file<br/>nothing duplicates, nothing is lost"]
+ classDef g fill:#1D6B4F,stroke:#1D6B4F,color:#fff
+ classDef w fill:#fff7e8,stroke:#A8721C,color:#5a3d0e
+ classDef n fill:#eef3ee,stroke:#9ab3a4,color:#1E2823
+ class RD,MV,LOG,DBX g
+ class CR,BI w
+ class WAL2,TMP n
+</pre></div>
+</section>
+
+<section>
+<p class="eyebrow">09 · Durability</p><h2>Losing the machine is a recoverable event</h2>
+<div class="dg"><pre class="mermaid">
+flowchart TB
+ E2["running engine"] -- "every few seconds" --> B["object store<br/>wal/ chunks (even the active segment)"]
+ E2 -- "snapshot on schedule" --> B2["object store<br/>snapshots/ zip + checksums"]
+ X2["💥 entire directory deleted"] --> RS["chronodim restore --from store<br/>(--as-of-txn N for point-in-time)"]
+ B --> RS
+ B2 --> RS
+ RS --> FP["fingerprint IDENTICAL<br/>every row, version, manifest back"]
+ PR["wal-prune"] -- "only after shipper + publisher release" --> OK["local disk stays bounded<br/>for 10-year operation"]
+ classDef g fill:#1D6B4F,stroke:#1D6B4F,color:#fff
+ classDef w fill:#fff7e8,stroke:#A8721C,color:#5a3d0e
+ classDef n fill:#eef3ee,stroke:#9ab3a4,color:#1E2823
+ class B,B2,RS,FP,OK g
+ class X2,PR w
+ class E2 n
+</pre></div>
+</section>
+
+<section>
+<p class="eyebrow">10 · Front doors</p><h2>CLI and the console share one path</h2>
+<div class="dg"><pre class="mermaid">
+flowchart TB
+ C1["CLI<br/>load · apply · asof · history<br/>snapshot · restore · run-id · bench"] --> ONE["the same Engine API<br/><i>no privileged shortcut exists</i>"]
+ C2["UiServer console<br/>browse · time travel · adjust<br/>audit · quarantine · health"] --> ONE
+ ONE --> LOCKF["one process holds the folder LOCK<br/>50 users work THROUGH it safely"]
+ classDef g fill:#1D6B4F,stroke:#1D6B4F,color:#fff
+ classDef n fill:#eef3ee,stroke:#9ab3a4,color:#1E2823
+ class ONE,LOCKF g
+ class C1,C2 n
+</pre></div>
+</section>
+
+<section>
+<p class="eyebrow">11 · Testkit</p><h2>The proof strategy</h2>
+<div class="dg"><pre class="mermaid">
+flowchart TB
+ GEN["random scenario generator<br/>updates · deletes · dups · late arrivals"] --> ENG["ChronoDim<br/><i>all the clever code</i>"]
+ GEN --> REF["ReferenceScd2<br/><i>deliberately naive, no optimizations</i>"]
+ ENG --> CMP{"full state equal?<br/>every row · every version · both time axes"}
+ REF --> CMP
+ CMP -- "yes, always" --> OK2["94 tests · 600-scenario soak<br/>58M-row drill · every commit"]
+ CMP -- "ever no" --> BUG["a real bug — caught before you"]
+ classDef g fill:#1D6B4F,stroke:#1D6B4F,color:#fff
+ classDef w fill:#fff7e8,stroke:#A8721C,color:#5a3d0e
+ classDef n fill:#eef3ee,stroke:#9ab3a4,color:#1E2823
+ class ENG,REF,OK2 g
+ class CMP,BUG w
+ class GEN n
+</pre></div>
+</section>
+</div>
