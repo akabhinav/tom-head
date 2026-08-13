@@ -130,7 +130,8 @@ public final class TableCatalog {
                 incoming.trackedColumns(), incoming.ignoredColumns(),
                 incoming.validTimeMode(), incoming.validTimeColumn(),
                 incoming.lateArrivalPolicy(), incoming.duplicatePolicy(), incoming.deleteMode(),
-                incoming.batchFailurePolicy(), incoming.qualityGates(), incoming.publish());
+                incoming.batchFailurePolicy(), incoming.qualityGates(), incoming.publish(),
+                incoming.absentColumns());
 
         batch.put(Codecs.metaKey(SUB_TABLE, merged.table()),
                 TableConfigIO.toStoredJson(merged, existing.tableId()).getBytes(StandardCharsets.UTF_8));

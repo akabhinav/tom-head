@@ -126,10 +126,20 @@ public final class TableConfigIO {
             publish = new TableConfig.PublishConfig(enabled, location, partitionBy, style, startCol, endCol, includeOps);
         }
 
+        TableConfig.AbsentColumns absent = TableConfig.AbsentColumns.NULL;
+        if (m.get("absent_columns") != null) {
+            String v = String.valueOf(m.get("absent_columns")).toLowerCase(Locale.ROOT);
+            absent = switch (v) {
+                case "null" -> TableConfig.AbsentColumns.NULL;
+                case "carry_forward" -> TableConfig.AbsentColumns.CARRY_FORWARD;
+                default -> throw new ConfigException("absent_columns must be null|carry_forward");
+            };
+        }
+
         return new TableConfig(table, businessKey, history,
                 strListOrEmpty(m.get("tracked_columns"), "tracked_columns"),
                 strListOrEmpty(m.get("ignored_columns"), "ignored_columns"),
-                vtMode, vtColumn, latePolicy, dupPolicy, deleteMode, failPolicy, gates, publish);
+                vtMode, vtColumn, latePolicy, dupPolicy, deleteMode, failPolicy, gates, publish, absent);
     }
 
     // ---- config ↔ stored JSON ----------------------------------------------------
@@ -163,6 +173,7 @@ public final class TableConfigIO {
         m.put("duplicate_policy", c.duplicatePolicy().name());
         m.put("delete_mode", c.deleteMode().name());
         m.put("batch_failure_policy", c.batchFailurePolicy().name());
+        m.put("absent_columns", c.absentColumns().name());
         List<Object> gates = new ArrayList<>();
         for (QualityGate g : c.qualityGates()) {
             Map<String, Object> gm = new LinkedHashMap<>();
@@ -238,7 +249,9 @@ public final class TableConfigIO {
                 TableConfig.DuplicatePolicy.valueOf((String) m.get("duplicate_policy")),
                 TableConfig.DeleteMode.valueOf((String) m.get("delete_mode")),
                 TableConfig.BatchFailurePolicy.valueOf((String) m.get("batch_failure_policy")),
-                gates, publish);
+                gates, publish,
+                m.get("absent_columns") == null ? TableConfig.AbsentColumns.NULL
+                        : TableConfig.AbsentColumns.valueOf((String) m.get("absent_columns")));
         return new Stored(cfg, tableId);
     }
 

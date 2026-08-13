@@ -102,7 +102,9 @@ public final class Scd2Applier {
                 // Snapshot semantics: a key present in the file — even with a failing
                 // row — must never be deleted-by-absence.
                 seenKeys.add(new BytesKey(pr.bkBytes));
-                String gateFailure = gateFailure(cfg, pr.values);
+                // Gates skip carried-forward columns: the inherited value passed
+                // its gates when it was originally written.
+                String gateFailure = gateFailure(cfg, pr.values, pr.absentCols());
                 if (gateFailure != null) {
                     handleRowFailure(cfg, rt, in, c, errors, quarantine, rowIndex, gateFailure);
                     continue;
@@ -230,7 +232,12 @@ public final class Scd2Applier {
 
     /** Returns null when all quality gates pass, else the first failure reason. */
     public static String gateFailure(TableConfig cfg, Map<String, Object> values) {
+        return gateFailure(cfg, values, java.util.Set.of());
+    }
+
+    private static String gateFailure(TableConfig cfg, Map<String, Object> values, java.util.Set<String> skip) {
         for (QualityGate g : cfg.qualityGates()) {
+            if (skip.contains(g.column())) continue;
             String fail = g.evaluate(values.get(g.column()));
             if (fail != null) return fail;
         }
@@ -245,8 +252,16 @@ public final class Scd2Applier {
     private static PendingRow coerceInternal(TableConfig cfg, TableSchema schema, List<Column> bkCols,
                               List<String> tracked, InputRow in, long txTime) {
         Map<String, Object> values = new LinkedHashMap<>();
+        // CARRY_FORWARD: a column MISSING from the input (key absent, not explicit
+        // null) inherits from the immediate previous version at placement time.
+        java.util.Set<String> absent = cfg.absentColumns() == TableConfig.AbsentColumns.CARRY_FORWARD
+                ? new java.util.LinkedHashSet<>() : java.util.Set.of();
         for (Column col : schema.columns()) {
             Object raw = in.values().get(col.name());
+            if (cfg.absentColumns() == TableConfig.AbsentColumns.CARRY_FORWARD
+                    && !in.values().containsKey(col.name()) && !in.delete()) {
+                absent.add(col.name());
+            }
             values.put(col.name(), col.type().coerce(raw));
         }
         Object[] bkValues = new Object[bkCols.size()];
@@ -270,7 +285,7 @@ public final class Scd2Applier {
         }
         byte[] bkBytes = Codecs.encodeBusinessKey(bkCols, bkValues);
         long attrHash = Codecs.attrHash(schema, tracked, values);
-        return new PendingRow(values, in.values(), in.delete(), validFrom, bkBytes, attrHash);
+        return new PendingRow(values, in.values(), in.delete(), validFrom, bkBytes, attrHash, absent);
     }
 
     private void handleRowFailure(TableConfig cfg, TableRuntime rt, InputRow in, Counters c,
@@ -490,6 +505,24 @@ public final class Scd2Applier {
         WorkingVersion p = pIdx >= 0 ? chain.get(pIdx) : null;
         WorkingVersion n = nextAbove(chain, vf);
 
+        // CARRY_FORWARD: columns absent from the input inherit from the IMMEDIATE
+        // previous version at this row's effective position (exact-instant
+        // supersede inherits from the version being superseded). The hash is
+        // recomputed over the merged row, so no-op detection stays exact.
+        if (!pr.delete && !pr.absentCols().isEmpty()) {
+            WorkingVersion src = exact >= 0 ? chain.get(exact) : p;
+            if (src != null && src.op != Op.DELETE.code) {
+                Map<String, Object> prev = decodeRow(rt, src);
+                Map<String, Object> merged = new LinkedHashMap<>(pr.values());
+                for (String col : pr.absentCols()) {
+                    Object inherited = prev.get(col);
+                    if (inherited != null) merged.put(col, inherited);
+                }
+                pr = new PendingRow(merged, pr.rawValues(), false, vf, pr.bkBytes(),
+                        Codecs.attrHash(cfg.currentSchema(), cfg.effectiveTrackedColumns(), merged));
+            }
+        }
+
         if (pr.delete) {
             if (exact >= 0) {
                 WorkingVersion ex = chain.get(exact);
@@ -635,7 +668,13 @@ public final class Scd2Applier {
     }
 
     private record PendingRow(Map<String, Object> values, Map<String, Object> rawValues,
-                              boolean delete, long validFrom, byte[] bkBytes, long attrHash) {}
+                              boolean delete, long validFrom, byte[] bkBytes, long attrHash,
+                              java.util.Set<String> absentCols) {
+        PendingRow(Map<String, Object> values, Map<String, Object> rawValues,
+                   boolean delete, long validFrom, byte[] bkBytes, long attrHash) {
+            this(values, rawValues, delete, validFrom, bkBytes, attrHash, java.util.Set.of());
+        }
+    }
 
     private record BytesKey(byte[] bytes) {
         @Override

@@ -19,7 +19,28 @@ public record TableConfig(
         DeleteMode deleteMode,
         BatchFailurePolicy batchFailurePolicy,
         List<QualityGate> qualityGates,
-        PublishConfig publish) {
+        PublishConfig publish,
+        AbsentColumns absentColumns) {
+
+    /**
+     * What a column MISSING from an adjustment row means (explicit null always
+     * means null). NULL = full-row semantics, absent becomes null (CDC feeds).
+     * CARRY_FORWARD = patch semantics: absent columns inherit their value from
+     * the immediate previous version of the entity (adjustment feeds).
+     */
+    public enum AbsentColumns { NULL, CARRY_FORWARD }
+
+    /** Pre-carry-forward constructor: absent columns default to NULL semantics. */
+    public TableConfig(String table, List<String> businessKey, List<TableSchema> schemaHistory,
+                       List<String> trackedColumns, List<String> ignoredColumns,
+                       ValidTimeMode validTimeMode, String validTimeColumn,
+                       LateArrivalPolicy lateArrivalPolicy, DuplicatePolicy duplicatePolicy,
+                       DeleteMode deleteMode, BatchFailurePolicy batchFailurePolicy,
+                       List<QualityGate> qualityGates, PublishConfig publish) {
+        this(table, businessKey, schemaHistory, trackedColumns, ignoredColumns, validTimeMode,
+                validTimeColumn, lateArrivalPolicy, duplicatePolicy, deleteMode, batchFailurePolicy,
+                qualityGates, publish, null);
+    }
 
     public enum ValidTimeMode { SOURCE_COLUMN, LOAD_TIME }
     public enum LateArrivalPolicy { SPLIT, REJECT, QUARANTINE }
@@ -112,6 +133,7 @@ public record TableConfig(
         if (deleteMode == null) deleteMode = DeleteMode.SOFT;
         if (batchFailurePolicy == null) batchFailurePolicy = BatchFailurePolicy.SKIP_ROWS;
         if (publish == null) publish = PublishConfig.disabled();
+        if (absentColumns == null) absentColumns = AbsentColumns.NULL;
 
         TableSchema current = schemaHistory.getLast();
         for (String k : businessKey) {
